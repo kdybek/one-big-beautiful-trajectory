@@ -3,11 +3,10 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-#SBATCH --gres=gpu:1
 #SBATCH --time=1:00:00
-#SBATCH --account=plgcrlreason-gpu-gh200
-#SBATCH --partition=plgrid-gpu-gh200
-#SBATCH --output=experiment_out.txt
+#SBATCH --account=plgcrlreason-cpu
+#SBATCH --partition=plgrid
+#SBATCH --output=setup_out.txt
 
 ml ML-bundle/24.06a
 
