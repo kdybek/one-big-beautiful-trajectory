@@ -11,7 +11,9 @@
 
 ml ML-bundle/24.06a
 
-cd $SCRATCH/one-big-beautiful-trajectory
+cd $SCRATCH
+mkdir -p one-big-beautiful-trajectory
+cd one-big-beautiful-trajectory
 python -m venv .venv
 source .venv/bin/activate
 
@@ -19,6 +21,7 @@ wget https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-li
 chmod +x bazel
 export PATH="$PWD:$PATH"
 export USE_BAZEL_VERSION=5.3.2
+export XDG_CACHE_HOME=$SCRATCH/.cache
 
 pip install -r ~/one-big-beautiful-trajectory/requirements.txt
 
