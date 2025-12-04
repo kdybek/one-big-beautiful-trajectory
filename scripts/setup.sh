@@ -18,6 +18,7 @@ source .venv/bin/activate
 wget https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64 -O bazel
 chmod +x bazel
 export PATH="$PWD:$PATH"
+export USE_BAZEL_VERSION=5.3.2
 
 pip install -r ~/one-big-beautiful-trajectory/requirements.txt
 
