@@ -4,10 +4,10 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --gres=gpu:1
-#SBATCH --time=5:00:00
+#SBATCH --time=10:00:00
 #SBATCH --account=plgcrlreason-gpu-gh200
 #SBATCH --partition=plgrid-gpu-gh200
-#SBATCH --output=experiment_out.txt
+#SBATCH --output=experiment_out_obbt.txt
 
 ml ML-bundle/24.06a
 
@@ -19,4 +19,9 @@ cd $SCRATCH/one-big-beautiful-trajectory
 cp -ru ~/one-big-beautiful-trajectory/* .
 source .venv/bin/activate
 
-python main.py --env_name=pointmaze-medium-navigate-v0 --eval_episodes=50 --agent=agents/crl.py --agent.alpha=0.03 --agent.dataset_class=OBBTDataset
+for ALPHA in 0.01 0.03 0.1 0.3
+do
+    python main.py --env_name=pointmaze-medium-navigate-v0 --eval_episodes=50 --agent=agents/crl.py --agent.alpha=$ALPHA --agent.dataset_class=OBBTDataset &
+done
+
+wait
