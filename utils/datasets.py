@@ -82,6 +82,13 @@ class Dataset(FrozenDict):
             result['next_observations'] = self._dict['observations'][np.minimum(idxs + 1, self.size - 1)]
         return result
 
+    def get_consecutive_nonterminal_idxs(self, start_idx, length):
+        """Return a list of consecutive non-terminal indices starting from start_idx."""
+        assert self._dict['terminals'][start_idx] == 0
+        nonterminal_idxs = np.nonzero(self._dict['terminals'] == 0)[0]
+        pos = np.searchsorted(nonterminal_idxs, start_idx)
+        return nonterminal_idxs[pos:pos + length]
+
 
 class ReplayBuffer(Dataset):
     """Replay buffer class.
@@ -307,6 +314,39 @@ class GCDataset:
             cur_idxs = np.maximum(idxs - i, initial_state_idxs)
             rets.append(jax.tree_util.tree_map(lambda arr: arr[cur_idxs], self.dataset['observations']))
         return jax.tree_util.tree_map(lambda *args: np.concatenate(args, axis=-1), *rets)
+
+
+@dataclasses.dataclass
+class OBBTDataset(GCDataset):
+    """Dataset class for one big beautiful goal-conditioned RL.
+
+    This class extends GCDataset to support sampling from big beautiful trajectories.
+    """
+
+    def sample(self, batch_size, idxs=None, evaluation=False):
+        """Sample a batch of transitions with goals."""
+
+        max_start_idx = self.size - batch_size - 1
+        valid_initial_locs = self.initial_locs[self.initial_locs <= max_start_idx]
+        init_idx = np.random.choice(valid_initial_locs)
+        idxs = self.dataset.get_consecutive_nonterminal_idxs(init_idx, batch_size)
+
+        batch = self.dataset.sample(batch_size, idxs)
+        if self.config['frame_stack'] is not None:
+            batch['observations'] = self.get_observations(idxs)
+            batch['next_observations'] = self.get_observations(idxs + 1)
+
+        batch['value_goals'] = self.get_observations(idxs + 1)
+        batch['actor_goals'] = self.get_observations(idxs + 1)
+        successes = (idxs == idxs + 1).astype(float)
+        batch['masks'] = 1.0 - successes
+        batch['rewards'] = successes - (1.0 if self.config['gc_negative'] else 0.0)
+
+        if self.config['p_aug'] is not None and not evaluation:
+            if np.random.rand() < self.config['p_aug']:
+                self.augment(batch, ['observations', 'next_observations', 'value_goals', 'actor_goals'])
+
+        return batch
 
 
 @dataclasses.dataclass
