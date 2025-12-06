@@ -9,8 +9,6 @@
 #SBATCH --partition=plgrid-gpu-gh200
 #SBATCH --output=setup_out.txt
 
-ml ML-bundle/24.06a
-
 cd $SCRATCH
 mkdir -p one-big-beautiful-trajectory
 cd one-big-beautiful-trajectory

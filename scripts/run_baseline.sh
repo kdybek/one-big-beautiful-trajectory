@@ -9,8 +9,6 @@
 #SBATCH --partition=plgrid-gpu-gh200
 #SBATCH --output=experiment_out.txt
 
-ml ML-bundle/24.06a
-
 export XDG_CACHE_HOME=$SCRATCH/.cache
 export WANDB_API_KEY=$(cat ~/.wandb_key)
 
