@@ -11,6 +11,7 @@
 
 export XDG_CACHE_HOME=$SCRATCH/.cache
 export WANDB_API_KEY=$(cat ~/.wandb_key)
+export MUJOCO_GL=egl
 
 cd $SCRATCH/one-big-beautiful-trajectory
 cp -ru ~/one-big-beautiful-trajectory/* .
