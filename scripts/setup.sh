@@ -12,7 +12,7 @@
 ml ML-bundle/24.06a
 
 cd $SCRATCH
-mkdir -p one-big-beautiful-trajectory
+cp -ru ~/one-big-beautiful-trajectory/. one-big-beautiful-trajectory/
 cd one-big-beautiful-trajectory
 python -m venv .venv
 source .venv/bin/activate
