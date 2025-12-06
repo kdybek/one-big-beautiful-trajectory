@@ -82,14 +82,6 @@ class Dataset(FrozenDict):
             result['next_observations'] = self._dict['observations'][np.minimum(idxs + 1, self.size - 1)]
         return result
 
-    def get_consecutive_nonterminal_idxs(self, start_idx, length):
-        """Return a list of consecutive non-terminal indices starting from start_idx."""
-        assert self._dict['terminals'][start_idx] == 0
-        nonterminal_idxs = np.nonzero(self._dict['terminals'] == 0)[0]
-        pos = np.searchsorted(nonterminal_idxs, start_idx)
-        return nonterminal_idxs[pos:pos + length]
-
-
 class ReplayBuffer(Dataset):
     """Replay buffer class.
 
@@ -329,7 +321,10 @@ class OBBTDataset(GCDataset):
         max_start_idx = self.size - batch_size - 1
         valid_initial_locs = self.initial_locs[self.initial_locs <= max_start_idx]
         init_idx = np.random.choice(valid_initial_locs)
-        idxs = self.dataset.get_consecutive_nonterminal_idxs(init_idx, batch_size)
+
+        nonterminal_idxs = np.nonzero(self.dataset['terminals'] < 0.5)[0]
+        pos = np.searchsorted(nonterminal_idxs, init_idx)
+        idxs = nonterminal_idxs[pos:pos + batch_size]
 
         batch = self.dataset.sample(batch_size, idxs)
         if self.config['frame_stack'] is not None:
