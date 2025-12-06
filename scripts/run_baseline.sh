@@ -14,7 +14,9 @@ ml ML-bundle/24.06a
 export XDG_CACHE_HOME=$SCRATCH/.cache
 export WANDB_API_KEY=$(cat ~/.wandb_key)
 
-cd $SCRATCH/one-big-beautiful-trajectory
+cd $SCRATCH
+cp -ru ~/one-big-beautiful-trajectory/. one-big-beautiful-trajectory/
+cd one-big-beautiful-trajectory
 source .venv/bin/activate
 
 python main.py --env_name=pointmaze-medium-navigate-v0 --eval_episodes=50 --agent=agents/crl.py --agent.alpha=0.03
