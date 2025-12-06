@@ -12,8 +12,9 @@
 ml ML-bundle/24.06a
 
 cd $SCRATCH
-cp -ru ~/one-big-beautiful-trajectory/. one-big-beautiful-trajectory/
+mkdir -p one-big-beautiful-trajectory
 cd one-big-beautiful-trajectory
+cp -ru ~/one-big-beautiful-trajectory/* .
 python -m venv .venv
 source .venv/bin/activate
 
@@ -23,6 +24,6 @@ export PATH="$PWD:$PATH"
 export USE_BAZEL_VERSION=5.3.2
 export XDG_CACHE_HOME=$SCRATCH/.cache
 
-pip install -r ~/one-big-beautiful-trajectory/requirements.txt
+pip install -r requirements.txt
 
 rm bazel
