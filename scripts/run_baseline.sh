@@ -18,6 +18,6 @@ cd $SCRATCH/one-big-beautiful-trajectory
 cp -ru ~/one-big-beautiful-trajectory/* .
 source .venv/bin/activate
 
-python main.py --env_name=pointmaze-medium-navigate-v0 --eval_episodes=50 --agent=agents/crl.py --agent.alpha=$ALPHA &
+python main.py --env_name=pointmaze-medium-navigate-v0 --eval_episodes=50 --agent=agents/crl.py --agent.alpha=0.03 &
 
 wait
