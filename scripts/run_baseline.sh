@@ -7,9 +7,8 @@
 #SBATCH --time=10:00:00
 #SBATCH --account=plgcrlreason-gpu-gh200
 #SBATCH --partition=plgrid-gpu-gh200
-#SBATCH --output=experiment_out.txt
-
-ml ML-bundle/24.06a
+#SBATCH --output=baseline.out
+#SBATCH --error=baseline.err
 
 export XDG_CACHE_HOME=$SCRATCH/.cache
 export WANDB_API_KEY=$(cat ~/.wandb_key)
@@ -19,9 +18,6 @@ cd $SCRATCH/one-big-beautiful-trajectory
 cp -ru ~/one-big-beautiful-trajectory/* .
 source .venv/bin/activate
 
-for ALPHA in 0.01 0.03 0.1 0.3
-do
-    python main.py --env_name=pointmaze-medium-navigate-v0 --eval_episodes=50 --agent=agents/crl.py --agent.alpha=$ALPHA &
-done
+python main.py --env_name=pointmaze-medium-navigate-v0 --eval_episodes=50 --agent=agents/crl.py --agent.alpha=$ALPHA &
 
 wait

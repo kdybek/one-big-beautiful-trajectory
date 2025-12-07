@@ -7,9 +7,8 @@
 #SBATCH --time=1:00:00
 #SBATCH --account=plgcrlreason-gpu-gh200
 #SBATCH --partition=plgrid-gpu-gh200
-#SBATCH --output=setup_out.txt
-
-ml ML-bundle/24.06a
+#SBATCH --output=setup.out
+#SBATCH --error=setup.err
 
 cd $SCRATCH
 mkdir -p one-big-beautiful-trajectory
