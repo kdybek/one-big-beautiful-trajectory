@@ -184,6 +184,8 @@ class GCDataset:
         # Pre-compute trajectory boundaries.
         (self.terminal_locs,) = np.nonzero(self.dataset['terminals'] > 0)
         self.initial_locs = np.concatenate([[0], self.terminal_locs[:-1] + 1])
+        self.initial_locs = np.array(list(set(self.initial_locs) - set(self.terminal_locs)))
+        self.initial_locs.sort()
         assert self.terminal_locs[-1] == self.size - 1
 
         # Assert probabilities sum to 1.
