@@ -250,6 +250,26 @@ class GCDataset:
 
         return batch
 
+    def sample_trajectories(self, n_traj):
+        """Sample full trajectories.
+
+        Args:
+            n_traj: Number of trajectories to sample.
+        """
+        traj_starts = np.random.choice(len(self.initial_locs), size=n_traj)
+        traj_start_idxs = self.initial_locs[traj_starts]
+        traj_end_idxs = self.terminal_locs[np.searchsorted(self.terminal_locs, traj_start_idxs)]
+
+        trajs = []
+        for start_idx, end_idx in zip(traj_start_idxs, traj_end_idxs):
+            traj = self.dataset.get_subset(np.arange(start_idx, end_idx + 1))
+            if self.config['frame_stack'] is not None:
+                traj['observations'] = self.get_observations(np.arange(start_idx, end_idx + 1))
+                traj['next_observations'] = self.get_observations(np.arange(start_idx + 1, end_idx + 2))
+            trajs.append(traj)
+
+        return trajs
+
     def sample_goals(self, idxs, p_curgoal, p_trajgoal, p_randomgoal, geom_sample):
         """Sample goals for the given indices."""
         batch_size = len(idxs)

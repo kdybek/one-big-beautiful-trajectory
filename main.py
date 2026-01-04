@@ -16,6 +16,8 @@ from utils.env_utils import make_env_and_datasets
 from utils.evaluation import evaluate
 from utils.flax_utils import restore_agent, save_agent
 from utils.log_utils import CsvLogger, get_exp_name, get_flag_dict, get_wandb_video, setup_wandb
+from utils.visualization import plot_crl_pca
+
 
 FLAGS = flags.FLAGS
 
@@ -151,6 +153,14 @@ def main(_):
 
             wandb.log(eval_metrics, step=i)
             eval_logger.log(eval_metrics, step=i)
+
+            plot_crl_pca(
+                agent=eval_agent,
+                dataset=val_dataset if val_dataset is not None else train_dataset,
+                n_traj=5,
+                n_states=10,
+                logger=wandb,
+            )
 
         # Save agent.
         if i % FLAGS.save_interval == 0:
