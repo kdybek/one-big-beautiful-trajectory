@@ -47,14 +47,40 @@ class CRLAgent(flax.struct.PyTreeNode):
             in_axes=-1,
             out_axes=-1,
         )(logits)
+        final_mask = batch['loss_mask'].astype(bool)
+        contrastive_loss = jnp.where(final_mask[..., None], contrastive_loss, 0.0)
         contrastive_loss = jnp.mean(contrastive_loss)
 
-        # Compute additional statistics.
         v = jnp.exp(v)
         logits = jnp.mean(logits, axis=-1)
         correct = jnp.argmax(logits, axis=1) == jnp.argmax(I, axis=1)
         logits_pos = jnp.sum(logits * I) / jnp.sum(I)
         logits_neg = jnp.sum(logits * (1 - I)) / jnp.sum(1 - I)
+
+        # Compute additional statistics.
+        same_traj_negatives = batch.get('same_traj_negatives', None)
+
+        if same_traj_negatives is not None:
+            same_traj_negatives = batch['same_traj_negatives'].astype(bool)
+            different_traj_negatives = batch['loss_mask'].astype(bool) & ~same_traj_negatives
+
+            # mask out diagonal
+            different_traj_negatives = different_traj_negatives.at[
+                jnp.arange(batch_size), jnp.arange(batch_size)
+            ].set(False)
+
+            logits_neg_same_traj = (
+                jnp.sum(logits * same_traj_negatives)
+                / jnp.maximum(jnp.sum(same_traj_negatives), 1)
+            )
+
+            logits_neg_different_traj = (
+                jnp.sum(logits * different_traj_negatives)
+                / jnp.maximum(jnp.sum(different_traj_negatives), 1)
+            )
+        else:
+            logits_neg_same_traj = jnp.array(0.0)
+            logits_neg_different_traj = jnp.array(0.0)
 
         return contrastive_loss, {
             'contrastive_loss': contrastive_loss,
@@ -65,6 +91,8 @@ class CRLAgent(flax.struct.PyTreeNode):
             'categorical_accuracy': jnp.mean(correct),
             'logits_pos': logits_pos,
             'logits_neg': logits_neg,
+            'logits_neg_same_traj': logits_neg_same_traj,
+            'logits_neg_different_traj': logits_neg_different_traj,
             'logits': logits.mean(),
         }
 
@@ -296,9 +324,9 @@ def get_config():
             agent_name='crl',  # Agent name.
             lr=3e-4,  # Learning rate.
             batch_size=1024,  # Batch size.
-            actor_hidden_dims=(512, 512, 512),  # Actor network hidden dimensions.
-            value_hidden_dims=(512, 512, 512),  # Value network hidden dimensions.
-            latent_dim=512,  # Latent dimension for phi and psi.
+            actor_hidden_dims=(512,) * 8,  # Actor network hidden dimensions. Default (512,) * 3.
+            value_hidden_dims=(512,) * 8,  # Value network hidden dimensions. Default (512,) * 3.
+            latent_dim=2048,  # Latent dimension for phi and psi. Default is 512.
             layer_norm=True,  # Whether to use layer normalization.
             discount=0.99,  # Discount factor.
             actor_loss='ddpgbc',  # Actor loss type ('awr' or 'ddpgbc').

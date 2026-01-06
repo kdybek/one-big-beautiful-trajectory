@@ -245,6 +245,8 @@ class GCDataset:
         if self.config['p_aug'] is not None and not evaluation:
             if np.random.rand() < self.config['p_aug']:
                 self.augment(batch, ['observations', 'next_observations', 'value_goals', 'actor_goals'])
+        
+        batch['loss_mask'] = np.ones((batch_size, batch_size), dtype=np.float32)
 
         return batch
 
@@ -331,7 +333,14 @@ class OBBTDataset(GCDataset):
             batch['observations'] = self.get_observations(idxs)
             batch['next_observations'] = self.get_observations(idxs + 1)
 
-        value_goal_idxs = idxs + 1
+        value_goal_idxs = self.sample_goals(
+            idxs,
+            self.config['value_p_curgoal'],
+            self.config['value_p_trajgoal'],
+            self.config['value_p_randomgoal'],
+            self.config['value_geom_sample'],
+        )
+        
         actor_goal_idxs = self.sample_goals(
             idxs,
             self.config['actor_p_curgoal'],
@@ -349,6 +358,44 @@ class OBBTDataset(GCDataset):
         if self.config['p_aug'] is not None and not evaluation:
             if np.random.rand() < self.config['p_aug']:
                 self.augment(batch, ['observations', 'next_observations', 'value_goals', 'actor_goals'])
+        
+        B = batch_size
+
+        # 1. Compute trajectory id for each index in the batch
+        #    (which trajectory each state belongs to)
+        traj_ids = np.searchsorted(self.initial_locs, idxs, side="right") - 1
+
+        # 2. Compute each state's position within its trajectory
+        pos_in_traj = idxs - self.initial_locs[traj_ids]
+
+        # 3. Compute goal positions in the same way
+        value_goal_traj_ids = np.searchsorted(self.initial_locs, value_goal_idxs, side="right") - 1
+        value_goal_pos = value_goal_idxs - self.initial_locs[value_goal_traj_ids]
+
+        # -----------------------------------------------------------
+        # 4. Create mask
+        # -----------------------------------------------------------
+        mask = np.ones((B, B), dtype=np.float32)
+
+        # Same-trajectory pairs
+        same_traj = traj_ids[:, None] == traj_ids[None, :]
+
+        # Conditions where goal is not valid:
+        #   state_position >= goal_position  (goal is earlier in the trajectory)
+        invalid_future = pos_in_traj[:, None] >= value_goal_pos[None, :]
+
+        # Combine
+        mask[np.where(same_traj & invalid_future)] = 0.0
+
+        same_traj_negatives = np.zeros((B, B), dtype=np.float32)
+        same_traj_negatives[np.where(same_traj & ~invalid_future)] = 1.0
+        same_traj_negatives[np.arange(B), np.arange(B)] = 0.0
+        batch["same_traj_negatives"] = same_traj_negatives
+
+        # 5. Ensure diagonal is always 1
+        np.fill_diagonal(mask, 1.0)
+
+        batch["loss_mask"] = mask
 
         return batch
 
