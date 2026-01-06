@@ -54,12 +54,10 @@ def plot_crl_pca(agent, dataset, n_traj, n_states, logger):
 
     all_reps = np.concatenate(phis + psis, axis=0)
 
-    all_reps /= np.linalg.norm(all_reps, axis=1, keepdims=True)
-
     pca = PCA(n_components=2)
     latents_2d = pca.fit_transform(all_reps)
 
-    fig, ax = plt.subplots(figsize=(6, 6))
+    fig, ax = plt.subplots(figsize=(6, 6), dpi=200)
 
     latents_2d = np.asarray(latents_2d)
 
@@ -80,7 +78,7 @@ def plot_crl_pca(agent, dataset, n_traj, n_states, logger):
         ax.scatter(
             latents_2d[goals, 0],
             latents_2d[goals, 1],
-            label=f"traj {traj_id}",
+            label=f"goal {traj_id}",
             alpha=1.0,
             marker="*",
         )
