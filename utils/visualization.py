@@ -13,10 +13,8 @@ def plot_crl_pca(agent, dataset, n_traj, n_states, logger):
         dataset: Dataset to sample trajectories from.
         num_traj: Number of trajectories to plot.
     """
-    phis = []
     psis = []
     traj_ids = []
-    types = []
 
     trajs = dataset.sample_trajectories(n_traj)
 
@@ -33,29 +31,17 @@ def plot_crl_pca(agent, dataset, n_traj, n_states, logger):
             info=True,
         )
 
-        phi = np.array(jax.device_get(phi))
         psi = np.array(jax.device_get(psi))
 
         # Average over ensemble members
-        if phi.ndim == 3:
-            phi = phi.mean(axis=0)  # (T, D)
+        if psi.ndim == 3:
             psi = psi.mean(axis=0)  # (T, D)
 
-        psi = psi[-1].reshape(1, -1)  # (1, D)
-
-        phis.append(phi)
-        psis.append(psi)
-
-        traj_ids.extend([traj_id] * len(phi))
-        traj_ids.append(traj_id)
-
-        types.extend(["state"] * len(phi))
-        types.append("goal")
-
-    all_reps = np.concatenate(phis + psis, axis=0)
+        psis.extend(psi)
+        traj_ids.extend([traj_id] * len(psi))
 
     pca = PCA(n_components=2)
-    latents_2d = pca.fit_transform(all_reps)
+    latents_2d = pca.fit_transform(psis)
 
     fig, ax = plt.subplots(figsize=(6, 6), dpi=200)
 
@@ -64,23 +50,12 @@ def plot_crl_pca(agent, dataset, n_traj, n_states, logger):
     for traj_id in range(n_traj):
         idx = np.array(traj_ids) == traj_id
 
-        states = idx & (np.array(types) == "state")
-        goals = idx & (np.array(types) == "goal")
-
         ax.scatter(
-            latents_2d[states, 0],
-            latents_2d[states, 1],
+            latents_2d[idx, 0],
+            latents_2d[idx, 1],
             label=f"traj {traj_id}",
             alpha=0.7,
             marker="o",
-        )
-
-        ax.scatter(
-            latents_2d[goals, 0],
-            latents_2d[goals, 1],
-            label=f"goal {traj_id}",
-            alpha=1.0,
-            marker="*",
         )
 
     ax.set_title("CRL Latent PCA")
