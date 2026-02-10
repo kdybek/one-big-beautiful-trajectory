@@ -411,39 +411,18 @@ class OBBTDataset(GCDataset):
                 self.augment(
                     batch, ['observations', 'next_observations', 'value_goals', 'actor_goals'])
 
-        B = batch_size
+        traj_ids = np.searchsorted(self.initial_locs, idxs, side="right")
 
-        # 1. Compute trajectory id for each index in the batch
-        #    (which trajectory each state belongs to)
-        traj_ids = np.searchsorted(self.initial_locs, idxs, side="right") - 1
+        same_traj = traj_ids[None, :] == traj_ids[:, None]
+        smaller_idx = idxs[None, :] < idxs[:, None]
 
-        # 2. Compute each state's position within its trajectory
-        pos_in_traj = idxs - self.initial_locs[traj_ids]
-
-        # 3. Compute goal positions in the same way
-        value_goal_traj_ids = np.searchsorted(
-            self.initial_locs, value_goal_idxs, side="right") - 1
-        value_goal_pos = value_goal_idxs - self.initial_locs[value_goal_traj_ids]
-
-        # -----------------------------------------------------------
-        # 4. Create mask
-        # -----------------------------------------------------------
-        states_vs_goals_mask = np.ones((B, B), dtype=np.float32)
-        states_vs_states_mask = np.zeros((B, B), dtype=np.float32)
-
-        # Same-trajectory pairs
-        same_traj = traj_ids[:, None] == traj_ids[None, :]
-
-        # Conditions where goal is not valid:
-        #   state_position >= goal_position  (goal is earlier in the trajectory)
-        invalid_future = pos_in_traj[:, None] >= value_goal_pos[None, :]
-
+        states_vs_goals_mask = np.ones((batch_size, batch_size), dtype=np.float32)
         states_vs_goals_mask[np.where(same_traj)] = 0.0
         np.fill_diagonal(states_vs_goals_mask, 1.0)
 
-        states_vs_states_mask[np.where(same_traj & ~invalid_future)] = 1.0
-        np.fill_diagonal(states_vs_states_mask, 0.0)
-
+        states_vs_states_mask = np.zeros((batch_size, batch_size), dtype=np.float32)
+        states_vs_states_mask[np.where(same_traj & smaller_idx)] = 1.0
+        
         batch["states_vs_goals_mask"] = states_vs_goals_mask
         batch["states_vs_states_mask"] = states_vs_states_mask
 
