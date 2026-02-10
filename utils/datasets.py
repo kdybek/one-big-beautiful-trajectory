@@ -359,30 +359,39 @@ class OBBTDataset(GCDataset):
     This class extends GCDataset to support sampling from big beautiful trajectories.
     """
 
-    def sample_dirac(self, idxs, dirac_step):
-        """Sample goals at a fixed offset from the current state."""
-        goal_idxs = idxs + dirac_step
-        final_state_idxs = self.terminal_locs[np.searchsorted(self.terminal_locs, idxs)]
-        goal_idxs = np.minimum(goal_idxs, final_state_idxs)
-        return goal_idxs
+    def sample_from_trajectories(self, batch_size, per_traj_samples, init_locs, term_locs):
+        all_idxs = []
+        for init_loc, term_loc in zip(init_locs, term_locs, strict=True):
+            idxs = np.random.choice(
+                np.arange(init_loc, term_loc), size=per_traj_samples, replace=True)  # Only uniform for now
+            all_idxs.extend(idxs)
+
+        all_idxs = np.array(all_idxs[:batch_size])
+
+        return all_idxs
 
     def sample(self, batch_size, idxs=None, evaluation=False):
         """Sample a batch of transitions with goals."""
 
-        max_start_idx = self.size - batch_size - 1
-        valid_initial_locs = self.initial_locs[self.initial_locs <= max_start_idx]
-        init_idx = np.random.choice(valid_initial_locs)
+        per_traj_samples = self.config['per_traj_samples']
+        num_traj = batch_size // per_traj_samples + 1
+        init_locs = np.random.choice(self.initial_locs, size=num_traj, replace=False)
+        term_locs = self.terminal_locs[np.searchsorted(self.terminal_locs, init_locs, side='right')]
 
-        nonterminal_idxs = np.nonzero(self.dataset['terminals'] < 0.5)[0]
-        pos = np.searchsorted(nonterminal_idxs, init_idx)
-        idxs = nonterminal_idxs[pos:pos + batch_size]
+        idxs = self.sample_from_trajectories(batch_size, per_traj_samples, init_locs, term_locs)
 
         batch = self.dataset.sample(batch_size, idxs)
         if self.config['frame_stack'] is not None:
             batch['observations'] = self.get_observations(idxs)
             batch['next_observations'] = self.get_observations(idxs + 1)
 
-        value_goal_idxs = self.sample_dirac(idxs, self.config['value_dirac_step'])
+        value_goal_idxs = self.sample_goals(
+            idxs,
+            self.config['value_p_curgoal'],
+            self.config['value_p_trajgoal'],
+            self.config['value_p_randomgoal'],
+            self.config['value_geom_sample'],
+        )
         actor_goal_idxs = self.sample_goals(
             idxs,
             self.config['actor_p_curgoal'],
@@ -419,7 +428,8 @@ class OBBTDataset(GCDataset):
         # -----------------------------------------------------------
         # 4. Create mask
         # -----------------------------------------------------------
-        mask = np.ones((B, B), dtype=np.float32)
+        states_vs_goals_mask = np.ones((B, B), dtype=np.float32)
+        states_vs_states_mask = np.zeros((B, B), dtype=np.float32)
 
         # Same-trajectory pairs
         same_traj = traj_ids[:, None] == traj_ids[None, :]
@@ -428,18 +438,14 @@ class OBBTDataset(GCDataset):
         #   state_position >= goal_position  (goal is earlier in the trajectory)
         invalid_future = pos_in_traj[:, None] >= value_goal_pos[None, :]
 
-        # Combine
-        mask[np.where(same_traj & invalid_future)] = 0.0
+        states_vs_goals_mask[np.where(same_traj)] = 0.0
+        np.fill_diagonal(states_vs_goals_mask, 1.0)
 
-        same_traj_negatives = np.zeros((B, B), dtype=np.float32)
-        same_traj_negatives[np.where(same_traj & ~invalid_future)] = 1.0
-        same_traj_negatives[np.arange(B), np.arange(B)] = 0.0
-        batch["same_traj_negatives"] = same_traj_negatives
+        states_vs_states_mask[np.where(same_traj & ~invalid_future)] = 1.0
+        np.fill_diagonal(states_vs_states_mask, 0.0)
 
-        # 5. Ensure diagonal is always 1
-        np.fill_diagonal(mask, 1.0)
-
-        batch["loss_mask"] = mask
+        batch["states_vs_goals_mask"] = states_vs_goals_mask
+        batch["states_vs_states_mask"] = states_vs_states_mask
 
         return batch
 

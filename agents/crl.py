@@ -29,6 +29,7 @@ class CRLAgent(flax.struct.PyTreeNode):
             actions = batch['actions']
         else:
             actions = None
+
         v, phi, psi = self.network.select(module_name)(
             batch['observations'],
             batch['value_goals'],
@@ -39,17 +40,48 @@ class CRLAgent(flax.struct.PyTreeNode):
         if len(phi.shape) == 2:  # Non-ensemble.
             phi = phi[None, ...]
             psi = psi[None, ...]
+
+        I = jnp.eye(batch_size)
+
+        # States vs goals contrastive loss.
         logits = jnp.einsum('eik,ejk->ije', phi, psi) / jnp.sqrt(phi.shape[-1])
         # logits.shape is (B, B, e) with one term for positive pair and (B - 1) terms for negative pairs in each row.
-        I = jnp.eye(batch_size)
-        contrastive_loss = jax.vmap(
+        states_vs_goals_loss = jax.vmap(
             lambda _logits: optax.sigmoid_binary_cross_entropy(logits=_logits, labels=I),
             in_axes=-1,
             out_axes=-1,
         )(logits)
-        final_mask = batch['loss_mask'].astype(bool)
-        contrastive_loss = jnp.where(final_mask[..., None], contrastive_loss, 0.0)
-        contrastive_loss = jnp.mean(contrastive_loss)
+
+        states_vs_goals_mask = batch.get('states_vs_goals_mask', jnp.ones((batch_size, batch_size), dtype=bool))
+        states_vs_goals_loss = jnp.where(states_vs_goals_mask[..., None], states_vs_goals_loss, 0.0)
+        states_vs_goals_loss = jnp.mean(states_vs_goals_loss)
+
+        # States vs states contrastive loss.
+        states_vs_states_mask = batch.get('states_vs_states_mask', None)
+        if states_vs_states_mask is not None:
+            v_ss, phi_ss, psi_ss = self.network.select(module_name)(
+                batch['observations'],
+                batch['observations'],
+                actions=actions,
+                info=True,
+                params=grad_params,
+            )
+            if len(phi_ss.shape) == 2:  # Non-ensemble.
+                phi_ss = phi_ss[None, ...]
+                psi_ss = psi_ss[None, ...]
+
+            logits_ss = jnp.einsum('eik,ejk->ije', phi_ss, psi_ss) / jnp.sqrt(phi_ss.shape[-1])
+            states_vs_states_loss = jax.vmap(
+                lambda _logits: optax.sigmoid_binary_cross_entropy(logits=_logits, labels=I),
+                in_axes=-1,
+                out_axes=-1,
+            )(logits_ss)
+            states_vs_states_loss = jnp.where(states_vs_states_mask[..., None], states_vs_states_loss, 0.0)
+            states_vs_states_loss = jnp.mean(states_vs_states_loss)
+        else:
+            states_vs_states_loss = 0.0
+
+        contrative_loss = states_vs_goals_loss + states_vs_states_loss
 
         v = jnp.exp(v)
         logits = jnp.mean(logits, axis=-1)
@@ -57,33 +89,10 @@ class CRLAgent(flax.struct.PyTreeNode):
         logits_pos = jnp.sum(logits * I) / jnp.sum(I)
         logits_neg = jnp.sum(logits * (1 - I)) / jnp.sum(1 - I)
 
-        # Compute additional statistics.
-        same_traj_negatives = batch.get('same_traj_negatives', None)
-
-        if same_traj_negatives is not None:
-            same_traj_negatives = batch['same_traj_negatives'].astype(bool)
-            different_traj_negatives = batch['loss_mask'].astype(bool) & ~same_traj_negatives
-
-            # mask out diagonal
-            different_traj_negatives = different_traj_negatives.at[
-                jnp.arange(batch_size), jnp.arange(batch_size)
-            ].set(False)
-
-            logits_neg_same_traj = (
-                jnp.sum(logits * same_traj_negatives)
-                / jnp.maximum(jnp.sum(same_traj_negatives), 1)
-            )
-
-            logits_neg_different_traj = (
-                jnp.sum(logits * different_traj_negatives)
-                / jnp.maximum(jnp.sum(different_traj_negatives), 1)
-            )
-        else:
-            logits_neg_same_traj = jnp.array(0.0)
-            logits_neg_different_traj = jnp.array(0.0)
-
-        return contrastive_loss, {
-            'contrastive_loss': contrastive_loss,
+        return contrative_loss, {
+            'contrastive_loss': contrative_loss,
+            'states_vs_goals_loss': states_vs_goals_loss,
+            'states_vs_states_loss': states_vs_states_loss,
             'v_mean': v.mean(),
             'v_max': v.max(),
             'v_min': v.min(),
@@ -91,8 +100,6 @@ class CRLAgent(flax.struct.PyTreeNode):
             'categorical_accuracy': jnp.mean(correct),
             'logits_pos': logits_pos,
             'logits_neg': logits_neg,
-            'logits_neg_same_traj': logits_neg_same_traj,
-            'logits_neg_different_traj': logits_neg_different_traj,
             'logits': logits.mean(),
         }
 
@@ -340,11 +347,11 @@ def get_config():
             value_p_trajgoal=1.0,  # Probability of using a future state in the same trajectory as the value goal.
             value_p_randomgoal=0.0,  # Probability of using a random state as the value goal.
             value_geom_sample=True,  # Whether to use geometric sampling for future value goals.
-            value_dirac_step=1,
             actor_p_curgoal=0.0,  # Probability of using the current state as the actor goal.
             actor_p_trajgoal=1.0,  # Probability of using a future state in the same trajectory as the actor goal.
             actor_p_randomgoal=0.0,  # Probability of using a random state as the actor goal.
             actor_geom_sample=False,  # Whether to use geometric sampling for future actor goals.
+            per_traj_samples=128,  # Number of samples to draw from each trajectory for training.
             gc_negative=False,  # Unused (defined for compatibility with GCDataset).
             p_aug=0.0,  # Probability of applying image augmentation.
             frame_stack=ml_collections.config_dict.placeholder(int),  # Number of frames to stack.
