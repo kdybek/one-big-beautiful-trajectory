@@ -25,7 +25,7 @@ python main.py --env_name={{env}} \
                --agent=agents/crl.py \
                --agent.batch_size=1024 \
                --agent.per_traj_samples={{per_traj_samples1}} \
-               --agent.alpha=0.03 \ 
+               --agent.alpha=0.03 \
                --agent.dataset_class=OBBTDataset &
 
 python main.py --env_name={{env}} \
@@ -35,7 +35,7 @@ python main.py --env_name={{env}} \
                --agent=agents/crl.py \
                --agent.batch_size=1024 \
                --agent.per_traj_samples={{per_traj_samples2}} \
-               --agent.alpha=0.03 \ 
+               --agent.alpha=0.03 \
                --agent.dataset_class=OBBTDataset &
 
 python main.py --env_name={{env}} \
@@ -45,7 +45,7 @@ python main.py --env_name={{env}} \
                --agent=agents/crl.py \
                --agent.batch_size=1024 \
                --agent.per_traj_samples={{per_traj_samples3}} \
-               --agent.alpha=0.03 \ 
+               --agent.alpha=0.03 \
                --agent.dataset_class=OBBTDataset &
 
 python main.py --env_name={{env}} \

@@ -25,7 +25,7 @@ python main.py --env_name=antsoccer-arena-navigate-v0 \
                --agent=agents/crl.py \
                --agent.batch_size=1024 \
                --agent.per_traj_samples=32 \
-               --agent.alpha=0.03 \ 
+               --agent.alpha=0.03 \
                --agent.dataset_class=OBBTDataset &
 
 python main.py --env_name=antsoccer-arena-navigate-v0 \
@@ -35,7 +35,7 @@ python main.py --env_name=antsoccer-arena-navigate-v0 \
                --agent=agents/crl.py \
                --agent.batch_size=1024 \
                --agent.per_traj_samples=128 \
-               --agent.alpha=0.03 \ 
+               --agent.alpha=0.03 \
                --agent.dataset_class=OBBTDataset &
 
 python main.py --env_name=antsoccer-arena-navigate-v0 \
@@ -45,7 +45,7 @@ python main.py --env_name=antsoccer-arena-navigate-v0 \
                --agent=agents/crl.py \
                --agent.batch_size=1024 \
                --agent.per_traj_samples=512 \
-               --agent.alpha=0.03 \ 
+               --agent.alpha=0.03 \
                --agent.dataset_class=OBBTDataset &
 
 python main.py --env_name=antsoccer-arena-navigate-v0 \
