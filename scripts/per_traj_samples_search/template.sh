@@ -38,6 +38,8 @@ python main.py --env_name={{env}} \
                --agent.alpha=0.03 \
                --agent.dataset_class=OBBTDataset &
 
+wait
+
 python main.py --env_name={{env}} \
                --seed={{seed}} \
                --run_group=per_traj_samples_search \

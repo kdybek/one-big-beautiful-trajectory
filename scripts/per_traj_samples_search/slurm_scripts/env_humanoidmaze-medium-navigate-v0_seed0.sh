@@ -38,6 +38,8 @@ python main.py --env_name=humanoidmaze-medium-navigate-v0 \
                --agent.alpha=0.03 \
                --agent.dataset_class=OBBTDataset &
 
+wait
+
 python main.py --env_name=humanoidmaze-medium-navigate-v0 \
                --seed=0 \
                --run_group=per_traj_samples_search \

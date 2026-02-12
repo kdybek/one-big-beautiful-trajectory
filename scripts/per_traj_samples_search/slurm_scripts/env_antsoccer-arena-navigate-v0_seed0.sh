@@ -38,6 +38,8 @@ python main.py --env_name=antsoccer-arena-navigate-v0 \
                --agent.alpha=0.03 \
                --agent.dataset_class=OBBTDataset &
 
+wait
+
 python main.py --env_name=antsoccer-arena-navigate-v0 \
                --seed=0 \
                --run_group=per_traj_samples_search \
