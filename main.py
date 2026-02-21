@@ -59,6 +59,10 @@ def main(_):
     config = FLAGS.agent
     env, train_dataset, val_dataset = make_env_and_datasets(FLAGS.env_name, frame_stack=config['frame_stack'])
 
+    if config['model_size_testing']:
+        config['actor_hidden_dims'] = (config['hidden_dim_size'],) * config['num_hidden_layers']
+        config['value_hidden_dims'] = (config['hidden_dim_size'],) * config['num_hidden_layers']
+
     dataset_class = {
         'GCDataset': GCDataset,
         'HGCDataset': HGCDataset,

@@ -333,6 +333,13 @@ def get_config():
             batch_size=1024,  # Batch size.
             actor_hidden_dims=(512,) * 3,  # Actor network hidden dimensions. Default (512,) * 3.
             value_hidden_dims=(512,) * 3,  # Value network hidden dimensions. Default (512,) * 3.
+
+            # ---
+            model_size_testing=False,
+            hidden_dim_size=512,  # Hidden dimension size for all networks (for model size testing).
+            num_hidden_layers=3,  # Number of hidden layers for all networks (for model size testing).
+            # ---
+
             latent_dim=512,  # Latent dimension for phi and psi. Default is 512.
             layer_norm=True,  # Whether to use layer normalization.
             discount=0.99,  # Discount factor.
