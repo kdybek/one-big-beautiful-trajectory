@@ -6,16 +6,66 @@ if __name__ == "__main__":
     content = template_path.read_text()
 
     seeds = ['0', '1', '2']
+
     envs = [
-        'antmaze-medium-navigate-v0',
-        'antmaze-medium-stitch-v0',
-        'antsoccer-arena-navigate-v0',
-        'antsoccer-arena-stitch-v0',
-        'humanoidmaze-medium-navigate-v0',
-        'humanoidmaze-medium-stitch-v0',
-        'pointmaze-medium-navigate-v0',
-        'pointmaze-medium-stitch-v0'
+        {
+            'name': 'antmaze-medium-navigate-v0',
+            'alpha': '0.1',
+            'actor_p_randomgoal': '0.0',
+            'actor_p_trajgoal': '1.0',
+            'discount': '0.99',
+        },
+        {
+            'name': 'antmaze-medium-stitch-v0',
+            'alpha': '0.1',
+            'actor_p_randomgoal': '0.5',
+            'actor_p_trajgoal': '0.5',
+            'discount': '0.99',
+        },
+        {
+            'name': 'antsoccer-arena-navigate-v0',
+            'alpha': '0.3',
+            'actor_p_randomgoal': '0.0',
+            'actor_p_trajgoal': '1.0',
+            'discount': '0.99',
+        },
+        {
+            'name': 'antsoccer-arena-stitch-v0',
+            'alpha': '0.3',
+            'actor_p_randomgoal': '0.5',
+            'actor_p_trajgoal': '0.5',
+            'discount': '0.99',
+        },
+        {
+            'name': 'humanoidmaze-medium-navigate-v0',
+            'alpha': '0.1',
+            'actor_p_randomgoal': '0.0',
+            'actor_p_trajgoal': '1.0',
+            'discount': '0.995',
+        },
+        {
+            'name': 'humanoidmaze-medium-stitch-v0',
+            'alpha': '0.1',
+            'actor_p_randomgoal': '0.5',
+            'actor_p_trajgoal': '0.5',
+            'discount': '0.995',
+        },
+        {
+            'name': 'pointmaze-medium-navigate-v0',
+            'alpha': '0.03',
+            'actor_p_randomgoal': '0.0',
+            'actor_p_trajgoal': '1.0',
+            'discount': '0.99',
+        },
+        {
+            'name': 'pointmaze-medium-stitch-v0',
+            'alpha': '0.03',
+            'actor_p_randomgoal': '0.5',
+            'actor_p_trajgoal': '0.5',
+            'discount': '0.99',
+        },
     ]
+
     per_traj_samples_list = ['32', '512']
     num_layers_list = ['6', '9']
 
@@ -25,12 +75,18 @@ if __name__ == "__main__":
     for seed in seeds:
         for env in envs:
             _content = content.replace("{{seed}}", seed)
-            _content = _content.replace("{{env}}", env)
-            _content = _content.replace("{{per_traj_samples1}}", per_traj_samples_list[0])
-            _content = _content.replace("{{per_traj_samples2}}", per_traj_samples_list[1])
+            _content = _content.replace("{{env}}", env['name'])
+            _content = _content.replace("{{alpha}}", env['alpha'])
+            _content = _content.replace("{{actor_p_randomgoal}}", env['actor_p_randomgoal'])
+            _content = _content.replace("{{actor_p_trajgoal}}", env['actor_p_trajgoal'])
+            _content = _content.replace("{{discount}}", env['discount'])
+            _content = _content.replace(
+                "{{per_traj_samples1}}", per_traj_samples_list[0])
+            _content = _content.replace(
+                "{{per_traj_samples2}}", per_traj_samples_list[1])
             _content = _content.replace("{{num_hidden_layers1}}", num_layers_list[0])
             _content = _content.replace("{{num_hidden_layers2}}", num_layers_list[1])
 
-            script_name = f"env_{env}_seed{seed}.sh"
+            script_name = f"env_{env['name']}_seed{seed}.sh"
             script_path = output_path / script_name
             script_path.write_text(_content)

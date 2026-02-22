@@ -29,7 +29,10 @@ python main.py --env_name={{env}} \
                --agent.hidden_dim_size=512 \
                --agent.num_hidden_layers={{num_hidden_layers1}} \
                --agent.per_traj_samples={{per_traj_samples1}} \
-               --agent.alpha=0.03 \
+               --agent.discount={{discount}} \
+               --agent.alpha={{alpha}} \
+               --agent.actor_p_randomgoal={{actor_p_randomgoal}} \
+               --agent.actor_p_trajgoal={{actor_p_trajgoal}} \
                --agent.dataset_class=OBBTDataset &
 
 python main.py --env_name={{env}} \
@@ -42,7 +45,10 @@ python main.py --env_name={{env}} \
                --agent.hidden_dim_size=512 \
                --agent.num_hidden_layers={{num_hidden_layers2}} \
                --agent.per_traj_samples={{per_traj_samples1}} \
-               --agent.alpha=0.03 \
+               --agent.discount={{discount}} \
+               --agent.alpha={{alpha}} \
+               --agent.actor_p_randomgoal={{actor_p_randomgoal}} \
+               --agent.actor_p_trajgoal={{actor_p_trajgoal}} \
                --agent.dataset_class=OBBTDataset &
 
 wait
@@ -57,7 +63,10 @@ python main.py --env_name={{env}} \
                --agent.hidden_dim_size=512 \
                --agent.num_hidden_layers={{num_hidden_layers1}} \
                --agent.per_traj_samples={{per_traj_samples2}} \
-               --agent.alpha=0.03 \
+               --agent.discount={{discount}} \
+               --agent.alpha={{alpha}} \
+               --agent.actor_p_randomgoal={{actor_p_randomgoal}} \
+               --agent.actor_p_trajgoal={{actor_p_trajgoal}} \
                --agent.dataset_class=OBBTDataset &
 
 python main.py --env_name={{env}} \
@@ -70,7 +79,10 @@ python main.py --env_name={{env}} \
                --agent.hidden_dim_size=512 \
                --agent.num_hidden_layers={{num_hidden_layers2}} \
                --agent.per_traj_samples={{per_traj_samples2}} \
-               --agent.alpha=0.03 \
+               --agent.discount={{discount}} \
+               --agent.alpha={{alpha}} \
+               --agent.actor_p_randomgoal={{actor_p_randomgoal}} \
+               --agent.actor_p_trajgoal={{actor_p_trajgoal}} \
                --agent.dataset_class=OBBTDataset &
 
 wait
@@ -85,7 +97,10 @@ python main.py --env_name={{env}} \
                --agent.model_size_testing=True \
                --agent.hidden_dim_size=512 \
                --agent.num_hidden_layers={{num_hidden_layers1}} \
-               --agent.alpha=0.03 &
+               --agent.discount={{discount}} \
+               --agent.alpha={{alpha}} \
+               --agent.actor_p_randomgoal={{actor_p_randomgoal}} \
+               --agent.actor_p_trajgoal={{actor_p_trajgoal}} &
 
 python main.py --env_name={{env}} \
                --seed={{seed}} \
@@ -96,6 +111,9 @@ python main.py --env_name={{env}} \
                --agent.model_size_testing=True \
                --agent.hidden_dim_size=512 \
                --agent.num_hidden_layers={{num_hidden_layers2}} \
-               --agent.alpha=0.03 &
+               --agent.discount={{discount}} \
+               --agent.alpha={{alpha}} \
+               --agent.actor_p_randomgoal={{actor_p_randomgoal}} \
+               --agent.actor_p_trajgoal={{actor_p_trajgoal}} &
 
 wait

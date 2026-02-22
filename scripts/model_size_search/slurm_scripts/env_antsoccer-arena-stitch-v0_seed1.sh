@@ -29,7 +29,10 @@ python main.py --env_name=antsoccer-arena-stitch-v0 \
                --agent.hidden_dim_size=512 \
                --agent.num_hidden_layers=6 \
                --agent.per_traj_samples=32 \
-               --agent.alpha=0.03 \
+               --agent.discount=0.99 \
+               --agent.alpha=0.3 \
+               --agent.actor_p_randomgoal=0.5 \
+               --agent.actor_p_trajgoal=0.5 \
                --agent.dataset_class=OBBTDataset &
 
 python main.py --env_name=antsoccer-arena-stitch-v0 \
@@ -42,7 +45,10 @@ python main.py --env_name=antsoccer-arena-stitch-v0 \
                --agent.hidden_dim_size=512 \
                --agent.num_hidden_layers=9 \
                --agent.per_traj_samples=32 \
-               --agent.alpha=0.03 \
+               --agent.discount=0.99 \
+               --agent.alpha=0.3 \
+               --agent.actor_p_randomgoal=0.5 \
+               --agent.actor_p_trajgoal=0.5 \
                --agent.dataset_class=OBBTDataset &
 
 wait
@@ -57,7 +63,10 @@ python main.py --env_name=antsoccer-arena-stitch-v0 \
                --agent.hidden_dim_size=512 \
                --agent.num_hidden_layers=6 \
                --agent.per_traj_samples=512 \
-               --agent.alpha=0.03 \
+               --agent.discount=0.99 \
+               --agent.alpha=0.3 \
+               --agent.actor_p_randomgoal=0.5 \
+               --agent.actor_p_trajgoal=0.5 \
                --agent.dataset_class=OBBTDataset &
 
 python main.py --env_name=antsoccer-arena-stitch-v0 \
@@ -70,7 +79,10 @@ python main.py --env_name=antsoccer-arena-stitch-v0 \
                --agent.hidden_dim_size=512 \
                --agent.num_hidden_layers=9 \
                --agent.per_traj_samples=512 \
-               --agent.alpha=0.03 \
+               --agent.discount=0.99 \
+               --agent.alpha=0.3 \
+               --agent.actor_p_randomgoal=0.5 \
+               --agent.actor_p_trajgoal=0.5 \
                --agent.dataset_class=OBBTDataset &
 
 wait
@@ -85,7 +97,10 @@ python main.py --env_name=antsoccer-arena-stitch-v0 \
                --agent.model_size_testing=True \
                --agent.hidden_dim_size=512 \
                --agent.num_hidden_layers=6 \
-               --agent.alpha=0.03 &
+               --agent.discount=0.99 \
+               --agent.alpha=0.3 \
+               --agent.actor_p_randomgoal=0.5 \
+               --agent.actor_p_trajgoal=0.5 &
 
 python main.py --env_name=antsoccer-arena-stitch-v0 \
                --seed=1 \
@@ -96,6 +111,9 @@ python main.py --env_name=antsoccer-arena-stitch-v0 \
                --agent.model_size_testing=True \
                --agent.hidden_dim_size=512 \
                --agent.num_hidden_layers=9 \
-               --agent.alpha=0.03 &
+               --agent.discount=0.99 \
+               --agent.alpha=0.3 \
+               --agent.actor_p_randomgoal=0.5 \
+               --agent.actor_p_trajgoal=0.5 &
 
 wait
