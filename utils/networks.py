@@ -378,7 +378,12 @@ class GCBilinearValue(nn.Module):
         phi = self.phi(phi_inputs)
         psi = self.psi(goals)
 
-        v = (phi * psi / jnp.sqrt(self.latent_dim)).sum(axis=-1)
+        phi_mean = phi[..., : self.latent_dim // 2]
+        psi_mean = psi[..., : self.latent_dim // 2]
+
+
+        dimension = self.latent_dim // 2
+        v = (phi_mean * psi_mean / jnp.sqrt(dimension)).sum(axis=-1)
 
         if self.value_exp:
             v = jnp.exp(v)
