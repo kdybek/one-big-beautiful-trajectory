@@ -45,6 +45,7 @@ class CRLAgent(flax.struct.PyTreeNode):
 
         # States vs goals contrastive loss.
         logits = jnp.einsum('eik,ejk->ije', phi, psi) / jnp.sqrt(phi.shape[-1])
+        regularization_loss = self.config['regularization'] * (jnp.mean(phi ** 2) + jnp.mean(psi ** 2))
         # logits.shape is (B, B, e) with one term for positive pair and (B - 1) terms for negative pairs in each row.
         states_vs_goals_loss = jax.vmap(
             lambda _logits: optax.sigmoid_binary_cross_entropy(logits=_logits, labels=I),
@@ -81,7 +82,7 @@ class CRLAgent(flax.struct.PyTreeNode):
         else:
             states_vs_states_loss = 0.0
 
-        contrative_loss = states_vs_goals_loss + states_vs_states_loss
+        contrative_loss = states_vs_goals_loss + states_vs_states_loss + regularization_loss
 
         v = jnp.exp(v)
         logits = jnp.mean(logits, axis=-1)
@@ -345,6 +346,7 @@ def get_config():
             discount=0.99,  # Discount factor.
             actor_loss='ddpgbc',  # Actor loss type ('awr' or 'ddpgbc').
             alpha=0.1,  # Temperature in AWR or BC coefficient in DDPG+BC.
+            regularization=0.0,  # L2 regularization coefficient for latent representations (phi and psi).
             const_std=True,  # Whether to use constant standard deviation for the actor.
             discrete=False,  # Whether the action space is discrete.
             encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
