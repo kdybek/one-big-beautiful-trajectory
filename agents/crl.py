@@ -65,49 +65,17 @@ class CRLAgent(flax.struct.PyTreeNode):
         kl_psi = -0.5 * jnp.sum(1 + 2 * psi_log_std - psi_mean**2 - psi_std**2, axis=-1)
         kl_loss = kl_phi.mean() + kl_psi.mean()
 
-
         I = jnp.eye(batch_size)
 
-        # States vs goals contrastive loss.
         logits = jnp.einsum('eik,ejk->ije', phi, psi) / jnp.sqrt(phi.shape[-1])
-        regularization_loss = self.config['regularization'] * (jnp.mean(phi ** 2) + jnp.mean(psi ** 2))
         # logits.shape is (B, B, e) with one term for positive pair and (B - 1) terms for negative pairs in each row.
-        states_vs_goals_loss = jax.vmap(
+        contrastive_loss = jax.vmap(
             lambda _logits: optax.sigmoid_binary_cross_entropy(logits=_logits, labels=I),
             in_axes=-1,
             out_axes=-1,
         )(logits)
 
-        states_vs_goals_mask = batch.get('states_vs_goals_mask', jnp.ones((batch_size, batch_size), dtype=bool))
-        states_vs_goals_loss = jnp.where(states_vs_goals_mask[..., None], states_vs_goals_loss, 0.0)
-        states_vs_goals_loss = jnp.mean(states_vs_goals_loss)
-
-        # States vs states contrastive loss.
-        states_vs_states_mask = batch.get('states_vs_states_mask', None)
-        if states_vs_states_mask is not None:
-            v_ss, phi_ss, psi_ss = self.network.select(module_name)(
-                batch['observations'],
-                batch['observations'],
-                actions=actions,
-                info=True,
-                params=grad_params,
-            )
-            if len(phi_ss.shape) == 2:  # Non-ensemble.
-                phi_ss = phi_ss[None, ...]
-                psi_ss = psi_ss[None, ...]
-
-            logits_ss = jnp.einsum('eik,ejk->ije', phi_ss, psi_ss) / jnp.sqrt(phi_ss.shape[-1])
-            states_vs_states_loss = jax.vmap(
-                lambda _logits: optax.sigmoid_binary_cross_entropy(logits=_logits, labels=I),
-                in_axes=-1,
-                out_axes=-1,
-            )(logits_ss)
-            states_vs_states_loss = jnp.where(states_vs_states_mask[..., None], states_vs_states_loss, 0.0)
-            states_vs_states_loss = jnp.mean(states_vs_states_loss)
-        else:
-            states_vs_states_loss = 0.0
-
-        contrative_loss = states_vs_goals_loss + states_vs_states_loss + regularization_loss
+        contrative_loss = jnp.mean(contrastive_loss)
 
         v = jnp.exp(v)
         logits = jnp.mean(logits, axis=-1)
@@ -115,11 +83,12 @@ class CRLAgent(flax.struct.PyTreeNode):
         logits_pos = jnp.sum(logits * I) / jnp.sum(I)
         logits_neg = jnp.sum(logits * (1 - I)) / jnp.sum(1 - I)
 
-        return contrative_loss + kl_loss, {
+        beta = self.config['beta']
+        total_loss = contrastive_loss + beta * kl_loss
+
+        return total_loss, {
             'contrastive_loss': contrative_loss,
             'kl_loss': kl_loss,
-            'states_vs_goals_loss': states_vs_goals_loss,
-            'states_vs_states_loss': states_vs_states_loss,
             'psi_mean': jnp.mean(psi_mean),
             'psi_std': jnp.mean(psi_std),
             'phi_mean': jnp.mean(phi_mean),
@@ -366,12 +335,12 @@ def get_config():
             agent_name='crl',  # Agent name.
             lr=3e-4,  # Learning rate.
             batch_size=1024,  # Batch size.
-            actor_hidden_dims=(512,) * 6,  # Actor network hidden dimensions. Default (512,) * 3.
-            value_hidden_dims=(512,) * 6,  # Value network hidden dimensions. Default (512,) * 3.
+            actor_hidden_dims=(512,) * 3,  # Actor network hidden dimensions. Default (512,) * 3.
+            value_hidden_dims=(512,) * 3,  # Value network hidden dimensions. Default (512,) * 3.
 
             # ---
             model_size_testing=False,
-            hidden_dim_size=1024,  # Hidden dimension size for all networks (for model size testing).
+            hidden_dim_size=512,  # Hidden dimension size for all networks (for model size testing).
             num_hidden_layers=3,  # Number of hidden layers for all networks (for model size testing).
             # ---
 
@@ -380,7 +349,7 @@ def get_config():
             discount=0.99,  # Discount factor.
             actor_loss='ddpgbc',  # Actor loss type ('awr' or 'ddpgbc').
             alpha=0.1,  # Temperature in AWR or BC coefficient in DDPG+BC.
-            regularization=0.0,  # L2 regularization coefficient for latent representations (phi and psi).
+            beta=0.0,  # Weight for the KL loss term.
             const_std=True,  # Whether to use constant standard deviation for the actor.
             discrete=False,  # Whether the action space is discrete.
             encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
@@ -399,5 +368,3 @@ def get_config():
             p_aug=0.0,  # Probability of applying image augmentation.
             frame_stack=ml_collections.config_dict.placeholder(int),  # Number of frames to stack.
         )
-    )
-    return config
