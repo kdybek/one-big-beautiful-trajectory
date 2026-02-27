@@ -10,18 +10,18 @@ from utils.flax_utils import ModuleDict, TrainState, nonpytree_field
 from utils.networks import GCActor, GCBilinearValue, GCDiscreteActor, GCDiscreteBilinearCritic
 
 
-class CRLAgent(flax.struct.PyTreeNode):
-    """Contrastive RL (CRL) agent.
+class RPCRLAgent(flax.struct.PyTreeNode):
+    """Probabilistic Representation Contrastive RL (RPCRL) agent.
 
     This implementation supports both AWR (actor_loss='awr') and DDPG+BC (actor_loss='ddpgbc') for the actor loss.
-    CRL with DDPG+BC only fits a Q function, while CRL with AWR fits both Q and V functions to compute advantages.
+    RPCRL with DDPG+BC only fits a Q function, while RPCRL with AWR fits both Q and V functions to compute advantages.
     """
 
     rng: Any
     network: Any
     config: Any = nonpytree_field()
 
-    def contrastive_loss(self, batch, grad_params, module_name='critic'):
+    def contrastive_loss(self, batch, grad_params, rng, module_name='critic'):
         """Compute the contrastive value loss for the Q or V function."""
         batch_size = batch['observations'].shape[0]
 
@@ -29,6 +29,7 @@ class CRLAgent(flax.struct.PyTreeNode):
             actions = batch['actions']
         else:
             actions = None
+
         v, phi, psi = self.network.select(module_name)(
             batch['observations'],
             batch['value_goals'],
@@ -39,9 +40,35 @@ class CRLAgent(flax.struct.PyTreeNode):
         if len(phi.shape) == 2:  # Non-ensemble.
             phi = phi[None, ...]
             psi = psi[None, ...]
+
+        # Split the last dimension in half
+        latent_dim = phi.shape[-1]
+        phi_mean = phi[..., :latent_dim // 2]
+        # Applying exp() ensures std is strictly positive
+        phi_log_std = phi[..., latent_dim // 2:]
+        phi_std = jnp.exp(phi_log_std)
+        
+        # Do the same for psi if it follows the same architecture
+        psi_mean = psi[..., :latent_dim // 2]
+        psi_log_std = psi[..., latent_dim // 2:]
+        psi_std = jnp.exp(psi_log_std)
+
+        # Reparameterization trick to sample from the Gaussian defined by (phi_mean, phi_std) and (psi_mean, psi_std).
+        phi_rng, psi_rng = jax.random.split(rng, 2)
+        phi_eps = jax.random.normal(phi_rng, shape=phi_mean.shape)
+        psi_eps = jax.random.normal(psi_rng, shape=psi_mean.shape)
+        phi = phi_mean + phi_std * phi_eps
+        psi = psi_mean + psi_std * psi_eps
+
+        # Compute KL regularization to encourage the latent space to be close to a standard Gaussian.
+        kl_phi = -0.5 * jnp.sum(1 + 2 * phi_log_std - phi_mean**2 - phi_std**2, axis=-1)
+        kl_psi = -0.5 * jnp.sum(1 + 2 * psi_log_std - psi_mean**2 - psi_std**2, axis=-1)
+        kl_loss = jnp.mean(kl_phi) + jnp.mean(kl_psi)
+
+        I = jnp.eye(batch_size)
+
         logits = jnp.einsum('eik,ejk->ije', phi, psi) / jnp.sqrt(phi.shape[-1])
         # logits.shape is (B, B, e) with one term for positive pair and (B - 1) terms for negative pairs in each row.
-        I = jnp.eye(batch_size)
         contrastive_loss = jax.vmap(
             lambda _logits: optax.sigmoid_binary_cross_entropy(logits=_logits, labels=I),
             in_axes=-1,
@@ -49,15 +76,24 @@ class CRLAgent(flax.struct.PyTreeNode):
         )(logits)
         contrastive_loss = jnp.mean(contrastive_loss)
 
-        # Compute additional statistics.
         v = jnp.exp(v)
         logits = jnp.mean(logits, axis=-1)
         correct = jnp.argmax(logits, axis=1) == jnp.argmax(I, axis=1)
         logits_pos = jnp.sum(logits * I) / jnp.sum(I)
         logits_neg = jnp.sum(logits * (1 - I)) / jnp.sum(1 - I)
 
-        return contrastive_loss, {
+        beta = self.config['beta']
+        total_loss = contrastive_loss + beta * kl_loss
+
+        return total_loss, {
             'contrastive_loss': contrastive_loss,
+            'kl_loss': kl_loss,
+            'psi_mean': jnp.mean(psi_mean),
+            'psi_std': jnp.mean(psi_std),
+            'phi_mean': jnp.mean(phi_mean),
+            'phi_std': jnp.mean(phi_std),
+            'noise_phi': jnp.mean(phi_eps),
+            'noise_psi': jnp.mean(psi_eps),
             'v_mean': v.mean(),
             'v_max': v.max(),
             'v_min': v.min(),
@@ -138,12 +174,14 @@ class CRLAgent(flax.struct.PyTreeNode):
         info = {}
         rng = rng if rng is not None else self.rng
 
-        critic_loss, critic_info = self.contrastive_loss(batch, grad_params, 'critic')
+        rng, critic_rng, value_rng = jax.random.split(rng, 3)
+
+        critic_loss, critic_info = self.contrastive_loss(batch, grad_params, critic_rng, 'critic')
         for k, v in critic_info.items():
             info[f'critic/{k}'] = v
 
         if self.config['actor_loss'] == 'awr':
-            value_loss, value_info = self.contrastive_loss(batch, grad_params, 'value')
+            value_loss, value_info = self.contrastive_loss(batch, grad_params, value_rng, 'value')
             for k, v in value_info.items():
                 info[f'value/{k}'] = v
         else:
@@ -239,6 +277,7 @@ class CRLAgent(flax.struct.PyTreeNode):
                 layer_norm=config['layer_norm'],
                 ensemble=True,
                 value_exp=False,
+                probabilistic_reps=True,
                 state_encoder=encoders.get('critic_state'),
                 goal_encoder=encoders.get('critic_goal'),
             )
@@ -251,6 +290,7 @@ class CRLAgent(flax.struct.PyTreeNode):
                 layer_norm=config['layer_norm'],
                 ensemble=False,
                 value_exp=False,
+                probabilistic_reps=True,
                 state_encoder=encoders.get('value_state'),
                 goal_encoder=encoders.get('value_goal'),
             )
@@ -293,16 +333,17 @@ def get_config():
     config = ml_collections.ConfigDict(
         dict(
             # Agent hyperparameters.
-            agent_name='crl',  # Agent name.
+            agent_name='rpcrl',  # Agent name.
             lr=3e-4,  # Learning rate.
             batch_size=1024,  # Batch size.
-            actor_hidden_dims=(512, 512, 512),  # Actor network hidden dimensions.
-            value_hidden_dims=(512, 512, 512),  # Value network hidden dimensions.
-            latent_dim=512,  # Latent dimension for phi and psi.
+            actor_hidden_dims=(512,) * 3,  # Actor network hidden dimensions. Default (512,) * 3.
+            value_hidden_dims=(512,) * 3,  # Value network hidden dimensions. Default (512,) * 3.
+            latent_dim=512,  # Latent dimension for phi and psi. Default is 512.
             layer_norm=True,  # Whether to use layer normalization.
             discount=0.99,  # Discount factor.
             actor_loss='ddpgbc',  # Actor loss type ('awr' or 'ddpgbc').
             alpha=0.1,  # Temperature in AWR or BC coefficient in DDPG+BC.
+            beta=0.0,  # Weight for the KL loss term.
             const_std=True,  # Whether to use constant standard deviation for the actor.
             discrete=False,  # Whether the action space is discrete.
             encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).

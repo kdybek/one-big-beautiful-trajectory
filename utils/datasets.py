@@ -23,8 +23,7 @@ def random_crop(img, crop_from, padding):
         crop_from: Coordinates to crop from.
         padding: Padding size.
     """
-    padded_img = jnp.pad(
-        img, ((padding, padding), (padding, padding), (0, 0)), mode='edge')
+    padded_img = jnp.pad(img, ((padding, padding), (padding, padding), (0, 0)), mode='edge')
     return jax.lax.dynamic_slice(padded_img, crop_from, img.shape)
 
 
@@ -80,8 +79,7 @@ class Dataset(FrozenDict):
         """Return a subset of the dataset given the indices."""
         result = jax.tree_util.tree_map(lambda arr: arr[idxs], self._dict)
         if 'next_observations' not in result:
-            result['next_observations'] = self._dict['observations'][np.minimum(
-                idxs + 1, self.size - 1)]
+            result['next_observations'] = self._dict['observations'][np.minimum(idxs + 1, self.size - 1)]
         return result
 
 
@@ -187,29 +185,22 @@ class GCDataset:
         # Pre-compute trajectory boundaries.
         (self.terminal_locs,) = np.nonzero(self.dataset['terminals'] > 0)
         self.initial_locs = np.concatenate([[0], self.terminal_locs[:-1] + 1])
-        self.initial_locs = np.array(
-            list(set(self.initial_locs) - set(self.terminal_locs)))
-        self.initial_locs.sort()
         assert self.terminal_locs[-1] == self.size - 1
 
         # Assert probabilities sum to 1.
         assert np.isclose(
-            self.config['value_p_curgoal'] + self.config['value_p_trajgoal'] +
-            self.config['value_p_randomgoal'], 1.0
+            self.config['value_p_curgoal'] + self.config['value_p_trajgoal'] + self.config['value_p_randomgoal'], 1.0
         )
         assert np.isclose(
-            self.config['actor_p_curgoal'] + self.config['actor_p_trajgoal'] +
-            self.config['actor_p_randomgoal'], 1.0
+            self.config['actor_p_curgoal'] + self.config['actor_p_trajgoal'] + self.config['actor_p_randomgoal'], 1.0
         )
 
         if self.config['frame_stack'] is not None:
             # Only support compact (observation-only) datasets.
             assert 'next_observations' not in self.dataset
             if self.preprocess_frame_stack:
-                stacked_observations = self.get_stacked_observations(
-                    np.arange(self.size))
-                self.dataset = Dataset(self.dataset.copy(
-                    dict(observations=stacked_observations)))
+                stacked_observations = self.get_stacked_observations(np.arange(self.size))
+                self.dataset = Dataset(self.dataset.copy(dict(observations=stacked_observations)))
 
     def sample(self, batch_size, idxs=None, evaluation=False):
         """Sample a batch of transitions with goals.
@@ -254,12 +245,68 @@ class GCDataset:
 
         if self.config['p_aug'] is not None and not evaluation:
             if np.random.rand() < self.config['p_aug']:
-                self.augment(
-                    batch, ['observations', 'next_observations', 'value_goals', 'actor_goals'])
-
-        batch['loss_mask'] = np.ones((batch_size, batch_size), dtype=np.float32)
+                self.augment(batch, ['observations', 'next_observations', 'value_goals', 'actor_goals'])
 
         return batch
+
+    def sample_goals(self, idxs, p_curgoal, p_trajgoal, p_randomgoal, geom_sample):
+        """Sample goals for the given indices."""
+        batch_size = len(idxs)
+
+        # Random goals.
+        random_goal_idxs = self.dataset.get_random_idxs(batch_size)
+
+        # Goals from the same trajectory (excluding the current state, unless it is the final state).
+        final_state_idxs = self.terminal_locs[np.searchsorted(self.terminal_locs, idxs)]
+        if geom_sample:
+            # Geometric sampling.
+            offsets = np.random.geometric(p=1 - self.config['discount'], size=batch_size)  # in [1, inf)
+            traj_goal_idxs = np.minimum(idxs + offsets, final_state_idxs)
+        else:
+            # Uniform sampling.
+            distances = np.random.rand(batch_size)  # in [0, 1)
+            traj_goal_idxs = np.round(
+                (np.minimum(idxs + 1, final_state_idxs) * distances + final_state_idxs * (1 - distances))
+            ).astype(int)
+        if p_curgoal == 1.0:
+            goal_idxs = idxs
+        else:
+            goal_idxs = np.where(
+                np.random.rand(batch_size) < p_trajgoal / (1.0 - p_curgoal), traj_goal_idxs, random_goal_idxs
+            )
+
+            # Goals at the current state.
+            goal_idxs = np.where(np.random.rand(batch_size) < p_curgoal, idxs, goal_idxs)
+
+        return goal_idxs
+
+    def augment(self, batch, keys):
+        """Apply image augmentation to the given keys."""
+        padding = 3
+        batch_size = len(batch[keys[0]])
+        crop_froms = np.random.randint(0, 2 * padding + 1, (batch_size, 2))
+        crop_froms = np.concatenate([crop_froms, np.zeros((batch_size, 1), dtype=np.int64)], axis=1)
+        for key in keys:
+            batch[key] = jax.tree_util.tree_map(
+                lambda arr: np.array(batched_random_crop(arr, crop_froms, padding)) if len(arr.shape) == 4 else arr,
+                batch[key],
+            )
+
+    def get_observations(self, idxs):
+        """Return the observations for the given indices."""
+        if self.config['frame_stack'] is None or self.preprocess_frame_stack:
+            return jax.tree_util.tree_map(lambda arr: arr[idxs], self.dataset['observations'])
+        else:
+            return self.get_stacked_observations(idxs)
+
+    def get_stacked_observations(self, idxs):
+        """Return the frame-stacked observations for the given indices."""
+        initial_state_idxs = self.initial_locs[np.searchsorted(self.initial_locs, idxs, side='right') - 1]
+        rets = []
+        for i in reversed(range(self.config['frame_stack'])):
+            cur_idxs = np.maximum(idxs - i, initial_state_idxs)
+            rets.append(jax.tree_util.tree_map(lambda arr: arr[cur_idxs], self.dataset['observations']))
+        return jax.tree_util.tree_map(lambda *args: np.concatenate(args, axis=-1), *rets)
 
     def sample_trajectories(self, n_traj):
         """Sample full trajectories.
@@ -283,150 +330,6 @@ class GCDataset:
             trajs.append(traj)
 
         return trajs
-
-    def sample_goals(self, idxs, p_curgoal, p_trajgoal, p_randomgoal, geom_sample):
-        """Sample goals for the given indices."""
-        batch_size = len(idxs)
-
-        # Random goals.
-        random_goal_idxs = self.dataset.get_random_idxs(batch_size)
-
-        # Goals from the same trajectory (excluding the current state, unless it is the final state).
-        final_state_idxs = self.terminal_locs[np.searchsorted(self.terminal_locs, idxs)]
-        if geom_sample:
-            # Geometric sampling.
-            offsets = np.random.geometric(
-                p=1 - self.config['discount'], size=batch_size)  # in [1, inf)
-            traj_goal_idxs = np.minimum(idxs + offsets, final_state_idxs)
-        else:
-            # Uniform sampling.
-            distances = np.random.rand(batch_size)  # in [0, 1)
-            traj_goal_idxs = np.round(
-                (np.minimum(idxs + 1, final_state_idxs) *
-                 distances + final_state_idxs * (1 - distances))
-            ).astype(int)
-        if p_curgoal == 1.0:
-            goal_idxs = idxs
-        else:
-            goal_idxs = np.where(
-                np.random.rand(batch_size) < p_trajgoal /
-                (1.0 - p_curgoal), traj_goal_idxs, random_goal_idxs
-            )
-
-            # Goals at the current state.
-            goal_idxs = np.where(np.random.rand(batch_size) <
-                                 p_curgoal, idxs, goal_idxs)
-
-        return goal_idxs
-
-    def augment(self, batch, keys):
-        """Apply image augmentation to the given keys."""
-        padding = 3
-        batch_size = len(batch[keys[0]])
-        crop_froms = np.random.randint(0, 2 * padding + 1, (batch_size, 2))
-        crop_froms = np.concatenate(
-            [crop_froms, np.zeros((batch_size, 1), dtype=np.int64)], axis=1)
-        for key in keys:
-            batch[key] = jax.tree_util.tree_map(
-                lambda arr: np.array(batched_random_crop(
-                    arr, crop_froms, padding)) if len(arr.shape) == 4 else arr,
-                batch[key],
-            )
-
-    def get_observations(self, idxs):
-        """Return the observations for the given indices."""
-        if self.config['frame_stack'] is None or self.preprocess_frame_stack:
-            return jax.tree_util.tree_map(lambda arr: arr[idxs], self.dataset['observations'])
-        else:
-            return self.get_stacked_observations(idxs)
-
-    def get_stacked_observations(self, idxs):
-        """Return the frame-stacked observations for the given indices."""
-        initial_state_idxs = self.initial_locs[np.searchsorted(
-            self.initial_locs, idxs, side='right') - 1]
-        rets = []
-        for i in reversed(range(self.config['frame_stack'])):
-            cur_idxs = np.maximum(idxs - i, initial_state_idxs)
-            rets.append(jax.tree_util.tree_map(
-                lambda arr: arr[cur_idxs], self.dataset['observations']))
-        return jax.tree_util.tree_map(lambda *args: np.concatenate(args, axis=-1), *rets)
-
-
-@dataclasses.dataclass
-class OBBTDataset(GCDataset):
-    """Dataset class for one big beautiful goal-conditioned RL.
-
-    This class extends GCDataset to support sampling from big beautiful trajectories.
-    """
-
-    def sample_from_trajectories(self, batch_size, per_traj_samples, init_locs, term_locs):
-        all_idxs = []
-        for init_loc, term_loc in zip(init_locs, term_locs, strict=True):
-            idxs = np.random.choice(
-                np.arange(init_loc, term_loc), size=per_traj_samples, replace=True)  # Only uniform for now
-            all_idxs.extend(idxs)
-
-        all_idxs = np.array(all_idxs[:batch_size])
-
-        return all_idxs
-
-    def sample(self, batch_size, idxs=None, evaluation=False):
-        """Sample a batch of transitions with goals."""
-
-        per_traj_samples = self.config['per_traj_samples']
-        num_traj = batch_size // per_traj_samples + 1
-        init_locs = np.random.choice(self.initial_locs, size=num_traj, replace=False)
-        term_locs = self.terminal_locs[np.searchsorted(self.terminal_locs, init_locs, side='right')]
-
-        idxs = self.sample_from_trajectories(batch_size, per_traj_samples, init_locs, term_locs)
-
-        batch = self.dataset.sample(batch_size, idxs)
-        if self.config['frame_stack'] is not None:
-            batch['observations'] = self.get_observations(idxs)
-            batch['next_observations'] = self.get_observations(idxs + 1)
-
-        value_goal_idxs = self.sample_goals(
-            idxs,
-            self.config['value_p_curgoal'],
-            self.config['value_p_trajgoal'],
-            self.config['value_p_randomgoal'],
-            self.config['value_geom_sample'],
-        )
-        actor_goal_idxs = self.sample_goals(
-            idxs,
-            self.config['actor_p_curgoal'],
-            self.config['actor_p_trajgoal'],
-            self.config['actor_p_randomgoal'],
-            self.config['actor_geom_sample'],
-        )
-
-        batch['value_goals'] = self.get_observations(value_goal_idxs)
-        batch['actor_goals'] = self.get_observations(actor_goal_idxs)
-        successes = (idxs == value_goal_idxs).astype(float)
-        batch['masks'] = 1.0 - successes
-        batch['rewards'] = successes - (1.0 if self.config['gc_negative'] else 0.0)
-
-        if self.config['p_aug'] is not None and not evaluation:
-            if np.random.rand() < self.config['p_aug']:
-                self.augment(
-                    batch, ['observations', 'next_observations', 'value_goals', 'actor_goals'])
-
-        traj_ids = np.searchsorted(self.initial_locs, idxs, side="right")
-
-        same_traj = traj_ids[None, :] == traj_ids[:, None]
-        smaller_idx = idxs[None, :] < idxs[:, None]
-
-        states_vs_goals_mask = np.ones((batch_size, batch_size), dtype=np.float32)
-        states_vs_goals_mask[np.where(same_traj)] = 0.0
-        np.fill_diagonal(states_vs_goals_mask, 1.0)
-
-        states_vs_states_mask = np.zeros((batch_size, batch_size), dtype=np.float32)
-        states_vs_states_mask[np.where(same_traj & smaller_idx)] = 1.0
-        
-        batch["states_vs_goals_mask"] = states_vs_goals_mask
-        batch["states_vs_states_mask"] = states_vs_states_mask
-
-        return batch
 
 
 @dataclasses.dataclass
@@ -474,38 +377,31 @@ class HGCDataset(GCDataset):
 
         # Set low-level actor goals.
         final_state_idxs = self.terminal_locs[np.searchsorted(self.terminal_locs, idxs)]
-        low_goal_idxs = np.minimum(
-            idxs + self.config['subgoal_steps'], final_state_idxs)
+        low_goal_idxs = np.minimum(idxs + self.config['subgoal_steps'], final_state_idxs)
         batch['low_actor_goals'] = self.get_observations(low_goal_idxs)
 
         # Sample high-level actor goals and set prediction targets.
         # High-level future goals.
         if self.config['actor_geom_sample']:
             # Geometric sampling.
-            offsets = np.random.geometric(
-                p=1 - self.config['discount'], size=batch_size)  # in [1, inf)
+            offsets = np.random.geometric(p=1 - self.config['discount'], size=batch_size)  # in [1, inf)
             high_traj_goal_idxs = np.minimum(idxs + offsets, final_state_idxs)
         else:
             # Uniform sampling.
             distances = np.random.rand(batch_size)  # in [0, 1)
             high_traj_goal_idxs = np.round(
-                (np.minimum(idxs + 1, final_state_idxs) *
-                 distances + final_state_idxs * (1 - distances))
+                (np.minimum(idxs + 1, final_state_idxs) * distances + final_state_idxs * (1 - distances))
             ).astype(int)
-        high_traj_target_idxs = np.minimum(
-            idxs + self.config['subgoal_steps'], high_traj_goal_idxs)
+        high_traj_target_idxs = np.minimum(idxs + self.config['subgoal_steps'], high_traj_goal_idxs)
 
         # High-level random goals.
         high_random_goal_idxs = self.dataset.get_random_idxs(batch_size)
-        high_random_target_idxs = np.minimum(
-            idxs + self.config['subgoal_steps'], final_state_idxs)
+        high_random_target_idxs = np.minimum(idxs + self.config['subgoal_steps'], final_state_idxs)
 
         # Pick between high-level future goals and random goals.
         pick_random = np.random.rand(batch_size) < self.config['actor_p_randomgoal']
-        high_goal_idxs = np.where(
-            pick_random, high_random_goal_idxs, high_traj_goal_idxs)
-        high_target_idxs = np.where(
-            pick_random, high_random_target_idxs, high_traj_target_idxs)
+        high_goal_idxs = np.where(pick_random, high_random_goal_idxs, high_traj_goal_idxs)
+        high_target_idxs = np.where(pick_random, high_random_target_idxs, high_traj_target_idxs)
 
         batch['high_actor_goals'] = self.get_observations(high_goal_idxs)
         batch['high_actor_targets'] = self.get_observations(high_target_idxs)

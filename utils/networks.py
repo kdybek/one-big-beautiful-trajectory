@@ -336,6 +336,7 @@ class GCBilinearValue(nn.Module):
         layer_norm: Whether to apply layer normalization.
         ensemble: Whether to ensemble the value function.
         value_exp: Whether to exponentiate the value. Useful for contrastive learning.
+        probabilistic_reps: Whether the representations are probabilistic.
         state_encoder: Optional state encoder.
         goal_encoder: Optional goal encoder.
     """
@@ -345,6 +346,7 @@ class GCBilinearValue(nn.Module):
     layer_norm: bool = True
     ensemble: bool = True
     value_exp: bool = False
+    probabilistic_reps: bool = False
     state_encoder: nn.Module = None
     goal_encoder: nn.Module = None
 
@@ -378,12 +380,15 @@ class GCBilinearValue(nn.Module):
         phi = self.phi(phi_inputs)
         psi = self.psi(goals)
 
-        phi_mean = phi[..., : self.latent_dim // 2]
-        psi_mean = psi[..., : self.latent_dim // 2]
+        if self.probabilistic_reps:
+            phi_mean = phi[..., : self.latent_dim // 2]
+            psi_mean = psi[..., : self.latent_dim // 2]
 
 
-        dimension = self.latent_dim // 2
-        v = (phi_mean * psi_mean / jnp.sqrt(dimension)).sum(axis=-1)
+            dimension = self.latent_dim // 2
+            v = (phi_mean * psi_mean / jnp.sqrt(dimension)).sum(axis=-1)
+        else:
+            v = (phi * psi / jnp.sqrt(self.latent_dim)).sum(axis=-1)
 
         if self.value_exp:
             v = jnp.exp(v)

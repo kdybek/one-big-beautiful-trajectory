@@ -11,7 +11,7 @@ import wandb
 from absl import app, flags
 from agents import agents
 from ml_collections import config_flags
-from utils.datasets import Dataset, GCDataset, HGCDataset, OBBTDataset
+from utils.datasets import Dataset, GCDataset, HGCDataset
 from utils.env_utils import make_env_and_datasets
 from utils.evaluation import evaluate
 from utils.flax_utils import restore_agent, save_agent
@@ -59,14 +59,9 @@ def main(_):
     config = FLAGS.agent
     env, train_dataset, val_dataset = make_env_and_datasets(FLAGS.env_name, frame_stack=config['frame_stack'])
 
-    if config['model_size_testing']:
-        config['actor_hidden_dims'] = (config['hidden_dim_size'],) * config['num_hidden_layers']
-        config['value_hidden_dims'] = (config['hidden_dim_size'],) * config['num_hidden_layers']
-
     dataset_class = {
         'GCDataset': GCDataset,
         'HGCDataset': HGCDataset,
-        'OBBTDataset': OBBTDataset,
     }[config['dataset_class']]
     train_dataset = dataset_class(Dataset.create(**train_dataset), config)
     if val_dataset is not None:
@@ -158,13 +153,16 @@ def main(_):
             wandb.log(eval_metrics, step=i)
             eval_logger.log(eval_metrics, step=i)
 
-            plot_crl_pca(
-                agent=eval_agent,
-                dataset=val_dataset if val_dataset is not None else train_dataset,
-                n_traj=5,
-                n_states=10,
-                logger=wandb,
-            )
+            agent_name = config['agent_name']
+            if agent_name in ['crl', 'rpcrl']:
+                plot_crl_pca(
+                    agent=eval_agent,
+                    dataset=val_dataset if val_dataset is not None else train_dataset,
+                    n_traj=5,
+                    n_states=10,
+                    prob_reps=True if agent_name == 'rpcrl' else False,
+                    logger=wandb,
+                )
 
         # Save agent.
         if i % FLAGS.save_interval == 0:

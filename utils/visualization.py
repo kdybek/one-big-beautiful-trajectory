@@ -5,13 +5,16 @@ import matplotlib.pyplot as plt
 import wandb
 
 
-def plot_crl_pca(agent, dataset, n_traj, n_states, logger):
+def plot_crl_pca(agent, dataset, n_traj, n_states, prob_reps, logger):
     """Plot PCA of the agent's latent representations for a number of trajectories.
 
     Args:
         agent: Agent with an encoder to obtain latent representations.
         dataset: Dataset to sample trajectories from.
-        num_traj: Number of trajectories to plot.
+        n_traj: Number of trajectories to plot.
+        n_states: Number of states to use from each trajectory.
+        prob_reps: Whether the agent's network outputs probabilistic representations (mean and variance).
+        logger: Logger to log the resulting plot.
     """
     psis = []
     traj_ids = []
@@ -31,9 +34,10 @@ def plot_crl_pca(agent, dataset, n_traj, n_states, logger):
             info=True,
         )
 
-        latent_dim = phi.shape[-1]
-        phi_mean = phi[..., :latent_dim // 2]
-        psi_mean = psi[..., :latent_dim // 2]
+        if prob_reps:
+            latent_dim = phi.shape[-1]
+            phi = phi[..., :latent_dim // 2]
+            psi = psi[..., :latent_dim // 2]
 
         psi = np.array(jax.device_get(psi))
 
