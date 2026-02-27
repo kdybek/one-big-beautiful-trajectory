@@ -21,7 +21,7 @@ class CRLAgent(flax.struct.PyTreeNode):
     network: Any
     config: Any = nonpytree_field()
 
-    def contrastive_loss(self, batch, grad_params, module_name='critic'):
+    def contrastive_loss(self, batch, grad_params, rng, module_name='critic'):
         """Compute the contrastive value loss for the Q or V function."""
         batch_size = batch['observations'].shape[0]
 
@@ -40,6 +40,31 @@ class CRLAgent(flax.struct.PyTreeNode):
         if len(phi.shape) == 2:  # Non-ensemble.
             phi = phi[None, ...]
             psi = psi[None, ...]
+
+        # Split the last dimension in half
+        latent_dim = phi.shape[-1]
+        phi_mean = phi[..., :latent_dim // 2]
+        # Applying exp() ensures std is strictly positive
+        phi_log_std = phi[..., latent_dim // 2:]
+        phi_std = jnp.exp(phi_log_std)
+        
+        # Do the same for psi if it follows the same architecture
+        psi_mean = psi[..., :latent_dim // 2]
+        psi_log_std = psi[..., latent_dim // 2:]
+        psi_std = jnp.exp(psi_log_std)
+
+        # Reparameterization trick to sample from the Gaussian defined by (phi_mean, phi_std) and (psi_mean, psi_std).
+        phi_rng, psi_rng = jax.random.split(rng, 2)
+        phi_eps = jax.random.normal(phi_rng, shape=phi_mean.shape)
+        psi_eps = jax.random.normal(psi_rng, shape=psi_mean.shape)
+        phi = phi_mean + phi_std * phi_eps
+        psi = psi_mean + psi_std * psi_eps
+
+        # Compute KL regularization to encourage the latent space to be close to a standard Gaussian.
+        kl_phi = -0.5 * jnp.sum(1 + 2 * phi_log_std - phi_mean**2 - phi_std**2, axis=-1)
+        kl_psi = -0.5 * jnp.sum(1 + 2 * psi_log_std - psi_mean**2 - psi_std**2, axis=-1)
+        kl_loss = kl_phi.mean() + kl_psi.mean()
+
 
         I = jnp.eye(batch_size)
 
@@ -90,10 +115,17 @@ class CRLAgent(flax.struct.PyTreeNode):
         logits_pos = jnp.sum(logits * I) / jnp.sum(I)
         logits_neg = jnp.sum(logits * (1 - I)) / jnp.sum(1 - I)
 
-        return contrative_loss, {
+        return contrative_loss + kl_loss, {
             'contrastive_loss': contrative_loss,
+            'kl_loss': kl_loss,
             'states_vs_goals_loss': states_vs_goals_loss,
             'states_vs_states_loss': states_vs_states_loss,
+            'psi_mean': jnp.mean(psi_mean),
+            'psi_std': jnp.mean(psi_std),
+            'phi_mean': jnp.mean(phi_mean),
+            'phi_std': jnp.mean(phi_std),
+            'noise_phi': jnp.mean(phi_eps),
+            'noise_psi': jnp.mean(psi_eps),
             'v_mean': v.mean(),
             'v_max': v.max(),
             'v_min': v.min(),
@@ -174,12 +206,14 @@ class CRLAgent(flax.struct.PyTreeNode):
         info = {}
         rng = rng if rng is not None else self.rng
 
-        critic_loss, critic_info = self.contrastive_loss(batch, grad_params, 'critic')
+        rng, critic_rng, value_rng = jax.random.split(rng, 3)
+
+        critic_loss, critic_info = self.contrastive_loss(batch, grad_params, critic_rng, 'critic')
         for k, v in critic_info.items():
             info[f'critic/{k}'] = v
 
         if self.config['actor_loss'] == 'awr':
-            value_loss, value_info = self.contrastive_loss(batch, grad_params, 'value')
+            value_loss, value_info = self.contrastive_loss(batch, grad_params, value_rng, 'value')
             for k, v in value_info.items():
                 info[f'value/{k}'] = v
         else:
@@ -332,12 +366,12 @@ def get_config():
             agent_name='crl',  # Agent name.
             lr=3e-4,  # Learning rate.
             batch_size=1024,  # Batch size.
-            actor_hidden_dims=(512,) * 3,  # Actor network hidden dimensions. Default (512,) * 3.
-            value_hidden_dims=(512,) * 3,  # Value network hidden dimensions. Default (512,) * 3.
+            actor_hidden_dims=(512,) * 6,  # Actor network hidden dimensions. Default (512,) * 3.
+            value_hidden_dims=(512,) * 6,  # Value network hidden dimensions. Default (512,) * 3.
 
             # ---
             model_size_testing=False,
-            hidden_dim_size=512,  # Hidden dimension size for all networks (for model size testing).
+            hidden_dim_size=1024,  # Hidden dimension size for all networks (for model size testing).
             num_hidden_layers=3,  # Number of hidden layers for all networks (for model size testing).
             # ---
 

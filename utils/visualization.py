@@ -31,6 +31,10 @@ def plot_crl_pca(agent, dataset, n_traj, n_states, logger):
             info=True,
         )
 
+        latent_dim = phi.shape[-1]
+        phi_mean = phi[..., :latent_dim // 2]
+        psi_mean = psi[..., :latent_dim // 2]
+
         psi = np.array(jax.device_get(psi))
 
         # Average over ensemble members
