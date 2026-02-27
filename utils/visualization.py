@@ -27,19 +27,18 @@ def plot_crl_pca(agent, dataset, n_traj, n_states, prob_reps, logger):
         goals = traj['observations'][first_idx + 1:]
         actions = traj['actions'][first_idx:-1]
 
-        v, phi, psi = agent.network.select('critic')(
+        _, _, psi = agent.network.select('critic')(
             observations=observations,
             goals=goals,
             actions=actions,
             info=True,
         )
 
-        if prob_reps:
-            latent_dim = phi.shape[-1]
-            phi = phi[..., :latent_dim // 2]
-            psi = psi[..., :latent_dim // 2]
-
         psi = np.array(jax.device_get(psi))
+
+        if prob_reps:
+            latent_dim = psi.shape[-1]
+            psi = psi[..., :latent_dim // 2]
 
         # Average over ensemble members
         if psi.ndim == 3:
