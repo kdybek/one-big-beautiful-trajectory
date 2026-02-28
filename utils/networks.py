@@ -32,6 +32,32 @@ class Identity(nn.Module):
         return x
 
 
+class ResidualMLP(nn.Module):
+    hidden_dims: Sequence[int]
+    activations: Any = nn.gelu
+    activate_final: bool = False
+    layer_norm: bool = False
+    kernel_init: Any = default_init()
+
+    @nn.compact
+    def __call__(self, x):
+        for i, size in enumerate(self.hidden_dims):
+            h = nn.Dense(size, kernel_init=self.kernel_init)(x)
+            
+            # Apply activation + LayerNorm if not last layer or activate_final is True
+            if i + 1 < len(self.hidden_dims) or self.activate_final:
+                h = self.activations(h)
+                if self.layer_norm:
+                    h = nn.LayerNorm()(h)
+
+            # Residual connection only if dimensions match
+            if h.shape[-1] == x.shape[-1]:
+                x = x + h
+            else:
+                x = h
+
+        return x
+
 class MLP(nn.Module):
     """Multi-layer perceptron.
 
@@ -166,7 +192,7 @@ class GCActor(nn.Module):
     gc_encoder: nn.Module = None
 
     def setup(self):
-        self.actor_net = MLP(self.hidden_dims, activate_final=True)
+        self.actor_net = ResidualMLP(self.hidden_dims, activate_final=True)
         self.mean_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
         if self.state_dependent_std:
             self.log_std_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))

@@ -82,7 +82,7 @@ class CRLAgent(flax.struct.PyTreeNode):
         else:
             states_vs_states_loss = 0.0
 
-        contrative_loss = states_vs_goals_loss + states_vs_states_loss + regularization_loss
+        contrative_loss = states_vs_goals_loss + states_vs_states_loss 
 
         v = jnp.exp(v)
         logits = jnp.mean(logits, axis=-1)
@@ -90,8 +90,9 @@ class CRLAgent(flax.struct.PyTreeNode):
         logits_pos = jnp.sum(logits * I) / jnp.sum(I)
         logits_neg = jnp.sum(logits * (1 - I)) / jnp.sum(1 - I)
 
-        return contrative_loss, {
+        return contrative_loss + regularization_loss, {
             'contrastive_loss': contrative_loss,
+            'regularization_loss': regularization_loss,
             'states_vs_goals_loss': states_vs_goals_loss,
             'states_vs_states_loss': states_vs_states_loss,
             'v_mean': v.mean(),
@@ -332,8 +333,8 @@ def get_config():
             agent_name='crl',  # Agent name.
             lr=3e-4,  # Learning rate.
             batch_size=1024,  # Batch size.
-            actor_hidden_dims=(512,) * 3,  # Actor network hidden dimensions. Default (512,) * 3.
-            value_hidden_dims=(512,) * 3,  # Value network hidden dimensions. Default (512,) * 3.
+            actor_hidden_dims=(512,) * 12,  # Actor network hidden dimensions. Default (512,) * 3.
+            value_hidden_dims=(512,) * 12,  # Value network hidden dimensions. Default (512,) * 3.
 
             # ---
             model_size_testing=False,
@@ -346,7 +347,7 @@ def get_config():
             discount=0.99,  # Discount factor.
             actor_loss='ddpgbc',  # Actor loss type ('awr' or 'ddpgbc').
             alpha=0.1,  # Temperature in AWR or BC coefficient in DDPG+BC.
-            regularization=0.0,  # L2 regularization coefficient for latent representations (phi and psi).
+            regularization=0.01,  # L2 regularization coefficient for latent representations (phi and psi).
             const_std=True,  # Whether to use constant standard deviation for the actor.
             discrete=False,  # Whether the action space is discrete.
             encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
