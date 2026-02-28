@@ -310,7 +310,7 @@ class GCValue(nn.Module):
     gc_encoder: nn.Module = None
 
     def setup(self):
-        mlp_module = MLP
+        mlp_module = ResidualMLP
         if self.ensemble:
             mlp_module = ensemblize(mlp_module, 2)
         value_net = mlp_module((*self.hidden_dims, 1), activate_final=False, layer_norm=self.layer_norm)
@@ -375,7 +375,7 @@ class GCBilinearValue(nn.Module):
     goal_encoder: nn.Module = None
 
     def setup(self):
-        mlp_module = MLP
+        mlp_module = ResidualMLP
         if self.ensemble:
             mlp_module = ensemblize(mlp_module, 2)
 
