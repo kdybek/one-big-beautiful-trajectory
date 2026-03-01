@@ -1,14 +1,27 @@
 from typing import Any
 
 import flax
+import flax.linen as nn # --- CHANGED: Added for the LogBeta module ---
 import jax
 import jax.numpy as jnp
 import ml_collections
 import optax
+from flax.core import FrozenDict
 from utils.encoders import GCEncoder, encoder_modules
 from utils.flax_utils import ModuleDict, TrainState, nonpytree_field
 from utils.networks import GCActor, GCBilinearValue, GCDiscreteActor, GCDiscreteBilinearCritic
 
+
+# --- CHANGED: Added LogBeta module for dynamic regularization ---
+class LogBeta(nn.Module):
+    """Learnable parameter log_beta for dynamic regularization."""
+    init_value: float = 0.0
+
+    @nn.compact
+    def __call__(self):
+        log_beta = self.param('log_beta', lambda rng: jnp.full((), self.init_value))
+        return log_beta
+# ----------------------------------------------------------------
 
 class CRLAgent(flax.struct.PyTreeNode):
     """Contrastive RL (CRL) agent.
@@ -45,7 +58,19 @@ class CRLAgent(flax.struct.PyTreeNode):
 
         # States vs goals contrastive loss.
         logits = jnp.einsum('eik,ejk->ije', phi, psi) / jnp.sqrt(phi.shape[-1])
-        regularization_loss = self.config['regularization'] * (jnp.mean(phi ** 2) + jnp.mean(psi ** 2))
+
+        # --- CHANGED: Dynamic regularization logic ---
+        if self.config['regularization'] == 'dynamic':
+            log_beta = self.network.select('log_beta')(params=grad_params)
+            beta = jnp.exp(log_beta)
+            reg_coef = jax.lax.stop_gradient(beta)
+        else:
+            beta = None
+            reg_coef = self.config['regularization']
+
+        regularization_loss = reg_coef * (jnp.mean(phi ** 2) + jnp.mean(psi ** 2))
+        # ---------------------------------------------
+
         # logits.shape is (B, B, e) with one term for positive pair and (B - 1) terms for negative pairs in each row.
         states_vs_goals_loss = jax.vmap(
             lambda _logits: optax.sigmoid_binary_cross_entropy(logits=_logits, labels=I),
@@ -90,7 +115,16 @@ class CRLAgent(flax.struct.PyTreeNode):
         logits_pos = jnp.sum(logits * I) / jnp.sum(I)
         logits_neg = jnp.sum(logits * (1 - I)) / jnp.sum(1 - I)
 
-        return contrative_loss + regularization_loss, {
+        if self.config['regularization'] == 'dynamic':
+            delta = (logits_pos - logits_neg) - self.config['target_difficulty']
+            beta_loss = -beta * jax.lax.stop_gradient(delta)
+        else:
+            beta_loss = 0.0
+
+        # --- CHANGED: Added beta_loss to the total module loss and 'beta' to info ---
+        total_contrastive_module_loss = contrative_loss + regularization_loss + beta_loss
+        
+        info = {
             'contrastive_loss': contrative_loss,
             'regularization_loss': regularization_loss,
             'states_vs_goals_loss': states_vs_goals_loss,
@@ -104,6 +138,13 @@ class CRLAgent(flax.struct.PyTreeNode):
             'logits_neg': logits_neg,
             'logits': logits.mean(),
         }
+
+        if beta is not None:
+            info['beta'] = beta
+            info['beta_loss'] = beta_loss
+
+        return total_contrastive_module_loss, info
+        # ----------------------------------------------------------------------------
 
     def actor_loss(self, batch, grad_params, rng=None):
         """Compute the actor loss (AWR or DDPG+BC)."""
@@ -315,6 +356,14 @@ class CRLAgent(flax.struct.PyTreeNode):
             network_info.update(
                 value=(value_def, (ex_observations, ex_goals)),
             )
+
+        # --- CHANGED: Append LogBeta module to networks if dynamic ---
+        if config['regularization'] == 'dynamic':
+            network_info.update(
+                log_beta=(LogBeta(), ()),
+            )
+        # -------------------------------------------------------------
+
         networks = {k: v[0] for k, v in network_info.items()}
         network_args = {k: v[1] for k, v in network_info.items()}
 
@@ -333,8 +382,8 @@ def get_config():
             agent_name='crl',  # Agent name.
             lr=3e-4,  # Learning rate.
             batch_size=1024,  # Batch size.
-            actor_hidden_dims=(512,) * 12,  # Actor network hidden dimensions. Default (512,) * 3.
-            value_hidden_dims=(512,) * 12,  # Value network hidden dimensions. Default (512,) * 3.
+            actor_hidden_dims=(512,) * 3,  # Actor network hidden dimensions. Default (512,) * 3.
+            value_hidden_dims=(512,) * 3,  # Value network hidden dimensions. Default (512,) * 3.
 
             # ---
             model_size_testing=False,
@@ -347,7 +396,13 @@ def get_config():
             discount=0.99,  # Discount factor.
             actor_loss='ddpgbc',  # Actor loss type ('awr' or 'ddpgbc').
             alpha=0.1,  # Temperature in AWR or BC coefficient in DDPG+BC.
-            regularization=0.01,  # L2 regularization coefficient for latent representations (phi and psi).
+
+            # --- CHANGED: Allow integer/float or string 'dynamic' for regularization ---
+            # ml_collections allows changing types implicitly or explicitly by using place_holders.
+            regularization=ml_collections.config_dict.placeholder(object), # Default is "dynamic"
+            target_difficulty=1e-3,  # Target difficulty (logits_pos - logits_neg) for dynamic regularization.
+            # -------------------------------------------------------------------------
+
             const_std=True,  # Whether to use constant standard deviation for the actor.
             discrete=False,  # Whether the action space is discrete.
             encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
@@ -367,4 +422,5 @@ def get_config():
             frame_stack=ml_collections.config_dict.placeholder(int),  # Number of frames to stack.
         )
     )
+    config.regularization = "dynamic" # Default to dynamic regularization. Can be set to a float value for fixed regularization strength.
     return config
