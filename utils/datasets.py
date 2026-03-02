@@ -231,14 +231,14 @@ class GCDataset:
             batch['observations'] = self.get_observations(idxs)
             batch['next_observations'] = self.get_observations(idxs + 1)
 
-        value_goal_idxs = self.sample_goals(
+        value_goal_idxs, _ = self.sample_goals(
             idxs,
             self.config['value_p_curgoal'],
             self.config['value_p_trajgoal'],
             self.config['value_p_randomgoal'],
             self.config['value_geom_sample'],
         )
-        actor_goal_idxs = self.sample_goals(
+        actor_goal_idxs, in_traj_goal_mask = self.sample_goals(
             idxs,
             self.config['actor_p_curgoal'],
             self.config['actor_p_trajgoal'],
@@ -258,6 +258,7 @@ class GCDataset:
                     batch, ['observations', 'next_observations', 'value_goals', 'actor_goals'])
 
         batch['loss_mask'] = np.ones((batch_size, batch_size), dtype=np.float32)
+        batch['in_traj_goal_mask'] = in_traj_goal_mask.astype(np.float32)
 
         return batch
 
@@ -307,6 +308,7 @@ class GCDataset:
             ).astype(int)
         if p_curgoal == 1.0:
             goal_idxs = idxs
+            in_traj_goal_mask = np.ones(batch_size, dtype=bool)
         else:
             goal_idxs = np.where(
                 np.random.rand(batch_size) < p_trajgoal /
@@ -317,7 +319,9 @@ class GCDataset:
             goal_idxs = np.where(np.random.rand(batch_size) <
                                  p_curgoal, idxs, goal_idxs)
 
-        return goal_idxs
+            in_traj_goal_mask = goal_idxs == traj_goal_idxs
+
+        return goal_idxs, in_traj_goal_mask
 
     def augment(self, batch, keys):
         """Apply image augmentation to the given keys."""
@@ -385,14 +389,14 @@ class OBBTDataset(GCDataset):
             batch['observations'] = self.get_observations(idxs)
             batch['next_observations'] = self.get_observations(idxs + 1)
 
-        value_goal_idxs = self.sample_goals(
+        value_goal_idxs, _ = self.sample_goals(
             idxs,
             self.config['value_p_curgoal'],
             self.config['value_p_trajgoal'],
             self.config['value_p_randomgoal'],
             self.config['value_geom_sample'],
         )
-        actor_goal_idxs = self.sample_goals(
+        actor_goal_idxs, _ = self.sample_goals(
             idxs,
             self.config['actor_p_curgoal'],
             self.config['actor_p_trajgoal'],
@@ -459,7 +463,7 @@ class HGCDataset(GCDataset):
             batch['next_observations'] = self.get_observations(idxs + 1)
 
         # Sample value goals.
-        value_goal_idxs = self.sample_goals(
+        value_goal_idxs, _ = self.sample_goals(
             idxs,
             self.config['value_p_curgoal'],
             self.config['value_p_trajgoal'],

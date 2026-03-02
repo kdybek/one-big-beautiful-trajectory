@@ -1,5 +1,6 @@
 from typing import Any
 
+import copy
 import flax
 import jax
 import jax.numpy as jnp
@@ -30,6 +31,11 @@ class CRLAgent(flax.struct.PyTreeNode):
         else:
             actions = None
 
+        if module_name == 'out_traj_critic':
+            beta = 0.0
+        else:
+            beta = self.config['regularization']
+
         v, phi, psi = self.network.select(module_name)(
             batch['observations'],
             batch['value_goals'],
@@ -45,7 +51,7 @@ class CRLAgent(flax.struct.PyTreeNode):
 
         # States vs goals contrastive loss.
         logits = jnp.einsum('eik,ejk->ije', phi, psi) / jnp.sqrt(phi.shape[-1])
-        regularization_loss = self.config['regularization'] * (jnp.mean(phi ** 2) + jnp.mean(psi ** 2))
+        regularization_loss = beta * (jnp.mean(phi ** 2) + jnp.mean(psi ** 2))
         # logits.shape is (B, B, e) with one term for positive pair and (B - 1) terms for negative pairs in each row.
         states_vs_goals_loss = jax.vmap(
             lambda _logits: optax.sigmoid_binary_cross_entropy(logits=_logits, labels=I),
@@ -147,6 +153,12 @@ class CRLAgent(flax.struct.PyTreeNode):
             q1, q2 = self.network.select('critic')(batch['observations'], batch['actor_goals'], q_actions)
             q = jnp.minimum(q1, q2)
 
+            if self.config['out_traj_critic']:
+                q1_out_traj, q2_out_traj = self.network.select('out_traj_critic')(batch['observations'], batch['actor_goals'], q_actions)
+                q_out_traj = jnp.minimum(q1_out_traj, q2_out_traj)
+                in_traj_mask = batch.get('in_traj_mask', jnp.ones(q.shape[0], dtype=bool))
+                q = jnp.where(in_traj_mask[:, None], q, q_out_traj)
+
             # Normalize Q values by the absolute mean to make the loss scale invariant.
             q_loss = -q.mean() / jax.lax.stop_gradient(jnp.abs(q).mean() + 1e-6)
             log_prob = dist.log_prob(batch['actions'])
@@ -177,6 +189,12 @@ class CRLAgent(flax.struct.PyTreeNode):
         critic_loss, critic_info = self.contrastive_loss(batch, grad_params, 'critic')
         for k, v in critic_info.items():
             info[f'critic/{k}'] = v
+
+        if self.config['out_traj_critic']:
+            out_traj_critic_loss, out_traj_critic_info = self.contrastive_loss(batch, grad_params, 'out_traj_critic')
+            for k, v in out_traj_critic_info.items():
+                info[f'out_traj_critic/{k}'] = v
+            critic_loss += out_traj_critic_loss
 
         if self.config['actor_loss'] == 'awr':
             value_loss, value_info = self.contrastive_loss(batch, grad_params, 'value')
@@ -307,6 +325,7 @@ class CRLAgent(flax.struct.PyTreeNode):
             )
 
         network_info = dict(
+            out_traj_critic=(copy.deepcopy(critic_def), (ex_observations, ex_goals, ex_actions)),
             critic=(critic_def, (ex_observations, ex_goals, ex_actions)),
             actor=(actor_def, (ex_observations, ex_goals)),
         )
@@ -341,6 +360,7 @@ def get_config():
             num_hidden_layers=3,  # Number of hidden layers for all networks (for model size testing).
             # ---
 
+            out_traj_critic=False,  # Whether to use a separate critic for out-of-trajectory negatives.
             latent_dim=512,  # Latent dimension for phi and psi. Default is 512.
             layer_norm=True,  # Whether to use layer normalization.
             discount=0.99,  # Discount factor.
