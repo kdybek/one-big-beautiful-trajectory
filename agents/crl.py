@@ -26,7 +26,7 @@ class CRLAgent(flax.struct.PyTreeNode):
         """Compute the contrastive value loss for the Q or V function."""
         batch_size = batch['observations'].shape[0]
 
-        if module_name == 'critic':
+        if module_name == 'critic' or module_name == 'out_traj_critic':
             actions = batch['actions']
         else:
             actions = None
