@@ -269,6 +269,8 @@ class CRLAgent(flax.struct.PyTreeNode):
             encoder_module = encoder_modules[config['encoder']]
             encoders['critic_state'] = encoder_module()
             encoders['critic_goal'] = encoder_module()
+            encoders['out_traj_critic_state'] = encoder_module()
+            encoders['out_traj_critic_goal'] = encoder_module()
             encoders['actor'] = GCEncoder(concat_encoder=encoder_module())
             if config['actor_loss'] == 'awr':
                 encoders['value_state'] = encoder_module()
@@ -292,8 +294,8 @@ class CRLAgent(flax.struct.PyTreeNode):
                 layer_norm=config['layer_norm'],
                 ensemble=True,
                 value_exp=False,
-                state_encoder=encoders.get('critic_state'),
-                goal_encoder=encoders.get('critic_goal'),
+                state_encoder=encoders.get('out_traj_critic_state'),
+                goal_encoder=encoders.get('out_traj_critic_goal'),
                 action_dim=action_dim,
             )
         else:
@@ -312,8 +314,8 @@ class CRLAgent(flax.struct.PyTreeNode):
                 layer_norm=config['layer_norm'],
                 ensemble=True,
                 value_exp=False,
-                state_encoder=encoders.get('critic_state'),
-                goal_encoder=encoders.get('critic_goal'),
+                state_encoder=encoders.get('out_traj_critic_state'),
+                goal_encoder=encoders.get('out_traj_critic_goal'),
             )
 
         if config['actor_loss'] == 'awr':
