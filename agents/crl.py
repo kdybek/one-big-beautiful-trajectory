@@ -286,8 +286,27 @@ class CRLAgent(flax.struct.PyTreeNode):
                 goal_encoder=encoders.get('critic_goal'),
                 action_dim=action_dim,
             )
+            out_traj_critic_def = GCDiscreteBilinearCritic(
+                hidden_dims=config['value_hidden_dims'],
+                latent_dim=config['latent_dim'],
+                layer_norm=config['layer_norm'],
+                ensemble=True,
+                value_exp=False,
+                state_encoder=encoders.get('critic_state'),
+                goal_encoder=encoders.get('critic_goal'),
+                action_dim=action_dim,
+            )
         else:
             critic_def = GCBilinearValue(
+                hidden_dims=config['value_hidden_dims'],
+                latent_dim=config['latent_dim'],
+                layer_norm=config['layer_norm'],
+                ensemble=True,
+                value_exp=False,
+                state_encoder=encoders.get('critic_state'),
+                goal_encoder=encoders.get('critic_goal'),
+            )
+            out_traj_critic_def = GCBilinearValue(
                 hidden_dims=config['value_hidden_dims'],
                 latent_dim=config['latent_dim'],
                 layer_norm=config['layer_norm'],
@@ -325,7 +344,7 @@ class CRLAgent(flax.struct.PyTreeNode):
             )
 
         network_info = dict(
-            out_traj_critic=(copy.deepcopy(critic_def), (ex_observations, ex_goals, ex_actions)),
+            out_traj_critic=(out_traj_critic_def, (ex_observations, ex_goals, ex_actions)),
             critic=(critic_def, (ex_observations, ex_goals, ex_actions)),
             actor=(actor_def, (ex_observations, ex_goals)),
         )
