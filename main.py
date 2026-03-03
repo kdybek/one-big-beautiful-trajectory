@@ -45,6 +45,11 @@ config_flags.DEFINE_config_file('agent', 'agents/gciql.py', lock_config=False)
 
 
 def main(_):
+    # Prepare config FIRST
+    config = FLAGS.agent
+    if config['regularization'] != 'dynamic':
+        config['target_difficulty'] = None
+
     # Set up logger.
     exp_name = get_exp_name(FLAGS.seed)
     setup_wandb(project='obbt', group=FLAGS.run_group, name=exp_name)
@@ -55,8 +60,6 @@ def main(_):
     with open(os.path.join(FLAGS.save_dir, 'flags.json'), 'w') as f:
         json.dump(flag_dict, f)
 
-    # Set up environment and dataset.
-    config = FLAGS.agent
     env, train_dataset, val_dataset = make_env_and_datasets(FLAGS.env_name, frame_stack=config['frame_stack'])
 
     if config['model_size_testing']:

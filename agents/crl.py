@@ -382,8 +382,8 @@ def get_config():
             agent_name='crl',  # Agent name.
             lr=3e-4,  # Learning rate.
             batch_size=1024,  # Batch size.
-            actor_hidden_dims=(512,) * 3,  # Actor network hidden dimensions. Default (512,) * 3.
-            value_hidden_dims=(512,) * 3,  # Value network hidden dimensions. Default (512,) * 3.
+            actor_hidden_dims=(512,) * 6,  # Actor network hidden dimensions. Default (512,) * 3.
+            value_hidden_dims=(512,) * 6,  # Value network hidden dimensions. Default (512,) * 3.
 
             # ---
             model_size_testing=False,
@@ -400,7 +400,7 @@ def get_config():
             # --- CHANGED: Allow integer/float or string 'dynamic' for regularization ---
             # ml_collections allows changing types implicitly or explicitly by using place_holders.
             regularization=ml_collections.config_dict.placeholder(object), # Default is "dynamic"
-            target_difficulty=1e-3,  # Target difficulty (logits_pos - logits_neg) for dynamic regularization.
+            target_difficulty=1e-2,  # Target difficulty (logits_pos - logits_neg) for dynamic regularization.
             # -------------------------------------------------------------------------
 
             const_std=True,  # Whether to use constant standard deviation for the actor.
