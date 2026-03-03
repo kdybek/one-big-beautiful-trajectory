@@ -192,7 +192,7 @@ class GCActor(nn.Module):
     gc_encoder: nn.Module = None
 
     def setup(self):
-        self.actor_net = ResidualMLP(self.hidden_dims, activate_final=True)
+        self.actor_net = MLP(self.hidden_dims, activate_final=True)
         self.mean_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
         if self.state_dependent_std:
             self.log_std_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
@@ -310,7 +310,7 @@ class GCValue(nn.Module):
     gc_encoder: nn.Module = None
 
     def setup(self):
-        mlp_module = ResidualMLP
+        mlp_module = MLP
         if self.ensemble:
             mlp_module = ensemblize(mlp_module, 2)
         value_net = mlp_module((*self.hidden_dims, 1), activate_final=False, layer_norm=self.layer_norm)
@@ -375,7 +375,7 @@ class GCBilinearValue(nn.Module):
     goal_encoder: nn.Module = None
 
     def setup(self):
-        mlp_module = ResidualMLP
+        mlp_module = MLP
         if self.ensemble:
             mlp_module = ensemblize(mlp_module, 2)
 
