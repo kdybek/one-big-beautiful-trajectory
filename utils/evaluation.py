@@ -77,34 +77,44 @@ def evaluate(
         step = 0
         render = []
         while not done:
-            action = actor_fn(observations=observation, goals=goal, temperature=eval_temperature)
-            action = np.array(action)
-            if not config.get('discrete'):
-                if eval_gaussian is not None:
-                    action = np.random.normal(action, eval_gaussian)
-                action = np.clip(action, -1, 1)
+            action_output = actor_fn(observations=observation, goals=goal, temperature=eval_temperature)
+            action_output = np.array(action_output)
 
-            next_observation, reward, terminated, truncated, info = env.step(action)
-            done = terminated or truncated
-            step += 1
+            # Handle action chunks (2D) vs single actions (1D).
+            if action_output.ndim == 2:
+                actions_to_execute = action_output
+            else:
+                actions_to_execute = action_output[np.newaxis]
 
-            if should_render and (step % video_frame_skip == 0 or done):
-                frame = env.render().copy()
-                if goal_frame is not None:
-                    render.append(np.concatenate([goal_frame, frame], axis=0))
-                else:
-                    render.append(frame)
+            for action in actions_to_execute:
+                if done:
+                    break
+                if not config.get('discrete'):
+                    if eval_gaussian is not None:
+                        action = np.random.normal(action, eval_gaussian)
+                    action = np.clip(action, -1, 1)
 
-            transition = dict(
-                observation=observation,
-                next_observation=next_observation,
-                action=action,
-                reward=reward,
-                done=done,
-                info=info,
-            )
-            add_to(traj, transition)
-            observation = next_observation
+                next_observation, reward, terminated, truncated, info = env.step(action)
+                done = terminated or truncated
+                step += 1
+
+                if should_render and (step % video_frame_skip == 0 or done):
+                    frame = env.render().copy()
+                    if goal_frame is not None:
+                        render.append(np.concatenate([goal_frame, frame], axis=0))
+                    else:
+                        render.append(frame)
+
+                transition = dict(
+                    observation=observation,
+                    next_observation=next_observation,
+                    action=action,
+                    reward=reward,
+                    done=done,
+                    info=info,
+                )
+                add_to(traj, transition)
+                observation = next_observation
         if i < num_eval_episodes:
             add_to(stats, flatten(info))
             trajs.append(traj)

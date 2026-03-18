@@ -11,7 +11,7 @@ import wandb
 from absl import app, flags
 from agents import agents
 from ml_collections import config_flags
-from utils.datasets import Dataset, GCDataset, HGCDataset
+from utils.datasets import ADGCDataset, Dataset, GCDataset, HGCDataset
 from utils.env_utils import make_env_and_datasets
 from utils.evaluation import evaluate
 from utils.flax_utils import restore_agent, save_agent
@@ -62,6 +62,7 @@ def main(_):
     dataset_class = {
         'GCDataset': GCDataset,
         'HGCDataset': HGCDataset,
+        'ADGCDataset': ADGCDataset,
     }[config['dataset_class']]
     train_dataset = dataset_class(Dataset.create(**train_dataset), config)
     if val_dataset is not None:
@@ -76,11 +77,17 @@ def main(_):
         # Fill with the maximum action to let the agent know the action space size.
         example_batch['actions'] = np.full_like(example_batch['actions'], env.action_space.n - 1)
 
+    # For action-chunked datasets, use flattened action chunks as example actions.
+    if 'action_chunks' in example_batch:
+        ex_actions = example_batch['action_chunks'].reshape(example_batch['action_chunks'].shape[0], -1)
+    else:
+        ex_actions = example_batch['actions']
+
     agent_class = agents[config['agent_name']]
     agent = agent_class.create(
         FLAGS.seed,
         example_batch['observations'],
-        example_batch['actions'],
+        ex_actions,
         config,
     )
 
