@@ -140,6 +140,54 @@ class RunningMeanStd(flax.struct.PyTreeNode):
         return self.replace(mean=new_mean, var=new_var, count=total_count)
 
 
+class GCFlowMatchingActor(nn.Module):
+    """Goal-conditioned flow matching actor.
+
+    Parameterizes a velocity field v(x_t, t | s, g) for flow matching.
+    Input is [condition, noisy_actions, time] concatenated.
+    Output is predicted velocity (same dim as actions).
+
+    Attributes:
+        hidden_dims: Hidden layer dimensions.
+        action_dim: Action dimension (chunk_length * per_step_action_dim).
+        layer_norm: Whether to apply layer normalization.
+        gc_encoder: Optional GCEncoder module to encode the inputs.
+    """
+
+    hidden_dims: Sequence[int]
+    action_dim: int
+    layer_norm: bool = True
+    gc_encoder: nn.Module = None
+
+    def setup(self):
+        self.velocity_net = MLP(
+            (*self.hidden_dims, self.action_dim),
+            activate_final=False,
+            layer_norm=self.layer_norm,
+        )
+
+    def __call__(self, observations, goals=None, actions=None, time=None):
+        """Predict the velocity field.
+
+        Args:
+            observations: Observations.
+            goals: Goals (optional).
+            actions: Noisy actions x_t.
+            time: Diffusion time t in [0, 1].
+        """
+        if self.gc_encoder is not None:
+            condition = self.gc_encoder(observations, goals)
+        else:
+            inputs = [observations]
+            if goals is not None:
+                inputs.append(goals)
+            condition = jnp.concatenate(inputs, axis=-1)
+
+        time_input = time[..., None]  # (...,) -> (..., 1)
+        net_input = jnp.concatenate([condition, actions, time_input], axis=-1)
+        return self.velocity_net(net_input)
+
+
 class GCActor(nn.Module):
     """Goal-conditioned actor.
 
