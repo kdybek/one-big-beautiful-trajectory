@@ -23,7 +23,6 @@ from typing import Any, Dict, List
 # ---------------------------------------------------------------------------
 GRID: Dict[str, List[Any]] = {
     "seed": [0, 1, 2],
-    "agent.best_of_n": [1, 32],
     "env_name": [
         "pointmaze-medium-navigate-v0",
         "antmaze-medium-navigate-v0",
@@ -37,6 +36,7 @@ GRID: Dict[str, List[Any]] = {
     "agent": [
         "agents/accrl.py",
     ],
+    "agent.best_of_n": [1, 32],
     "agent.alpha": [0.3],
     "run_group": ["BestOfN"],
 }
