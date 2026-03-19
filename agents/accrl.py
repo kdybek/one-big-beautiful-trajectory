@@ -456,7 +456,7 @@ def get_config():
             discount=0.99,  # Discount factor.
             actor_loss='bestofn',  # Actor loss type ('awr', 'bestofn', or 'ddpgbc').
             alpha=0.1,  # Temperature in AWR or BC coefficient in DDPG+BC.
-            bc_coef=1.0,  # BC regularization coefficient for flow matching modes (awr).
+            bc_coef=0.0,  # BC regularization coefficient for flow matching modes (awr).
             const_std=True,  # Whether to use constant standard deviation for the actor (ddpgbc only).
             discrete=False,  # Whether the action space is discrete (not supported with chunk_length > 1).
             encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).

@@ -24,21 +24,16 @@ from typing import Any, Dict, List
 GRID: Dict[str, List[Any]] = {
     "seed": [0, 1, 2],
     "env_name": [
-        "pointmaze-medium-navigate-v0",
-        "antmaze-medium-navigate-v0",
         "humanoidmaze-medium-navigate-v0",
-        "pointmaze-medium-stitch-v0",
-        "antmaze-medium-stitch-v0",
-        "humanoidmaze-medium-stitch-v0",
-        "antsoccer-arena-navigate-v0",
-        "antsoccer-arena-stitch-v0",
     ],
     "agent": [
         "agents/accrl.py",
     ],
-    "agent.best_of_n": [1, 32],
+    "agent.action_chunk_length": [5],
+    "agent.best_of_n": [1],
+    "agent.actor_loss": ["awr"],
     "agent.alpha": [0.3],
-    "run_group": ["BestOfN"],
+    "run_group": ["AWR_grid"],
 }
 
 # Fixed flags added to every job (not swept over)
@@ -59,6 +54,26 @@ SLURM_DEFAULTS = {
     "account": "plgcrlreason-gpu-gh200",
     "partition": "plgrid-gpu-gh200",
 }
+
+
+def get_git_commit() -> str:
+    """Return the current HEAD commit hash. Warn if there are uncommitted changes."""
+    dirty = subprocess.run(
+        ["git", "status", "--porcelain"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
+    )
+    if dirty.stdout.strip():
+        print("WARNING: Uncommitted changes detected. Running from last commit.")
+        print(dirty.stdout)
+
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
+    )
+    if result.returncode != 0:
+        print(f"ERROR: Could not get git commit hash: {result.stderr.strip()}")
+        sys.exit(1)
+    return result.stdout.strip()
 
 
 def dict_permutations(grid: Dict[str, List[Any]]) -> List[Dict[str, Any]]:
@@ -93,11 +108,14 @@ def make_sbatch_script(
     slurm: Dict[str, Any],
     log_dir: str,
     name: str,
+    commit: str,
 ) -> str:
     os.makedirs(log_dir, exist_ok=True)
     safe_name = name.replace("/", "_").replace("=", "").replace(" ", "_")
-    out = os.path.join(log_dir, f"{safe_name}.out")
-    err = os.path.join(log_dir, f"{safe_name}.err")
+    log = os.path.join(log_dir, "slurm_%j.log")
+
+    short_commit = commit[:8]
+    run_dir = f"$SCRATCH/obbt-{short_commit}"
 
     lines = ["#!/bin/bash -l"]
     lines += [
@@ -110,16 +128,18 @@ def make_sbatch_script(
         f"#SBATCH --account={slurm['account']}",
         f"#SBATCH --partition={slurm['partition']}",
         f"#SBATCH --job-name={safe_name[:60]}",
-        f"#SBATCH --output={out}",
-        f"#SBATCH --error={err}",
+        f"#SBATCH --output={log}",
+        f"#SBATCH --error={log}",
         "",
         "export XDG_CACHE_HOME=$SCRATCH/.cache",
         "export WANDB_API_KEY=$(cat ~/.wandb_key)",
         "export MUJOCO_GL=egl",
         "",
-        "cd $SCRATCH/one-big-beautiful-trajectory",
-        "cp -ru ~/one-big-beautiful-trajectory/* .",
-        "source .venv/bin/activate",
+        f"# pinned commit: {commit}",
+        f"mkdir -p {run_dir}",
+        f"cp -ru ~/one-big-beautiful-trajectory/. {run_dir}/",
+        f"cd {run_dir}",
+        "source $SCRATCH/one-big-beautiful-trajectory/.venv/bin/activate",
         "",
         f"python main.py {flags_to_str(python_flags)} &",
         "",
@@ -141,6 +161,9 @@ def main() -> None:
     slurm = {**SLURM_DEFAULTS, "time": args.time, "mem": args.mem,
              "partition": args.partition, "account": args.account}
 
+    commit = get_git_commit()
+    print(f"Pinning to commit: {commit}")
+
     combos = dict_permutations(GRID)
     print(f"Total jobs: {len(combos)}")
 
@@ -149,11 +172,14 @@ def main() -> None:
         if answer.strip().lower() != "y":
             print("Aborted.")
             return
+        print(f"Run dir on $SCRATCH: obbt-{commit[:8]}/")
+        print("To clean up old run dirs when jobs are done:")
+        print("  ls $SCRATCH/obbt-*/  &&  rm -rf $SCRATCH/obbt-<old_commit>/")
 
     for i, combo in enumerate(combos):
         python_flags = {**FIXED, **combo}
         name = job_name(combo)
-        script = make_sbatch_script(python_flags, slurm, args.log_dir, name)
+        script = make_sbatch_script(python_flags, slurm, args.log_dir, name, commit)
 
         if args.dry:
             print(f"\n{'='*60}")
