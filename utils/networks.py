@@ -188,6 +188,52 @@ class GCFlowMatchingActor(nn.Module):
         return self.velocity_net(net_input)
 
 
+class GCOneStepActor(nn.Module):
+    """Goal-conditioned one-step actor for FQL (Flow Q-Learning).
+
+    Maps noise z ~ N(0,I) directly to an action in one forward pass.
+    Input is [condition, z] concatenated (no time input, no ODE integration).
+    Output is the predicted action (same dim as z).
+
+    Attributes:
+        hidden_dims: Hidden layer dimensions.
+        action_dim: Action dimension (chunk_length * per_step_action_dim).
+        layer_norm: Whether to apply layer normalization.
+        gc_encoder: Optional GCEncoder module to encode the inputs.
+    """
+
+    hidden_dims: Sequence[int]
+    action_dim: int
+    layer_norm: bool = True
+    gc_encoder: nn.Module = None
+
+    def setup(self):
+        self.net = MLP(
+            (*self.hidden_dims, self.action_dim),
+            activate_final=False,
+            layer_norm=self.layer_norm,
+        )
+
+    def __call__(self, observations, goals=None, noise=None):
+        """Predict the action directly from noise.
+
+        Args:
+            observations: Observations.
+            goals: Goals (optional).
+            noise: Noise vector z ~ N(0,I), same shape as actions.
+        """
+        if self.gc_encoder is not None:
+            condition = self.gc_encoder(observations, goals)
+        else:
+            inputs = [observations]
+            if goals is not None:
+                inputs.append(goals)
+            condition = jnp.concatenate(inputs, axis=-1)
+
+        net_input = jnp.concatenate([condition, noise], axis=-1)
+        return self.net(net_input)
+
+
 class GCActor(nn.Module):
     """Goal-conditioned actor.
 

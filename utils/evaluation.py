@@ -80,6 +80,8 @@ def evaluate(
         while not done:
             action_output = actor_fn(observations=observation, goals=goal, temperature=eval_temperature)
             action_output = np.array(action_output)
+            if action_output.ndim == 3:
+                action_output = action_output.squeeze(0)
 
             # Handle action chunks (2D) vs single actions (1D).
             if action_output.ndim == 2:

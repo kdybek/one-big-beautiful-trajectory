@@ -7,7 +7,7 @@ import ml_collections
 import optax
 from utils.encoders import GCEncoder, encoder_modules
 from utils.flax_utils import ModuleDict, TrainState, nonpytree_field
-from utils.networks import GCActor, GCBilinearValue, GCFlowMatchingActor
+from utils.networks import GCActor, GCBilinearValue, GCFlowMatchingActor, GCOneStepActor
 
 
 class ACCRLAgent(flax.struct.PyTreeNode):
@@ -18,9 +18,10 @@ class ACCRLAgent(flax.struct.PyTreeNode):
     evaluation into (chunk_length, action_dim) and executed sequentially.
 
     The critic's phi takes (s, flat_action_chunk) and psi takes (g). The contrastive loss
-    and actor losses (AWR / DDPG+BC / best-of-N) operate identically to CRL, just on
-    flattened action chunks. AWR and best-of-N modes use a flow matching actor instead of
-    a Gaussian actor.
+    and actor losses (AWR / DDPG+BC / best-of-N / FQL) operate identically to CRL, just on
+    flattened action chunks. AWR, best-of-N, and FQL modes use a flow matching actor instead
+    of a Gaussian actor. FQL additionally trains a one-step student policy distilled from the
+    flow teacher and guided by the CRL critic, enabling fast best-of-N inference.
     """
 
     rng: Any
@@ -76,11 +77,11 @@ class ACCRLAgent(flax.struct.PyTreeNode):
         }
 
     def actor_loss(self, batch, grad_params, rng=None):
-        """Compute the actor loss (AWR / best-of-N flow matching, or DDPG+BC Gaussian)."""
+        """Compute the actor loss (AWR / best-of-N / FQL flow matching, or DDPG+BC Gaussian)."""
         # Flatten action chunks for all actor loss computations.
         flat_actions = batch['action_chunks'].reshape(batch['action_chunks'].shape[0], -1)
 
-        if self.config['actor_loss'] in ('awr', 'bestofn'):
+        if self.config['actor_loss'] in ('awr', 'bestofn', 'fql'):
             # Flow matching velocity regression (behavioral cloning component).
             # This trains f_ξ ≈ π_β: the flow policy to capture the behavior distribution.
             rng, noise_rng, time_rng = jax.random.split(rng, 3)
@@ -125,7 +126,7 @@ class ACCRLAgent(flax.struct.PyTreeNode):
                     'adv': adv.mean(),
                     'fm_loss': bc_loss,
                 }
-            else:
+            elif self.config['actor_loss'] == 'bestofn':
                 # bestofn: pure BC via flow matching. Q is only used at inference
                 # for best-of-N selection (implicit KL constraint, Eq. 10 in Q-chunking).
                 actor_loss = bc_loss
@@ -134,6 +135,53 @@ class ACCRLAgent(flax.struct.PyTreeNode):
                     'actor_loss': actor_loss,
                     'bc_loss': bc_loss,
                     'fm_loss': bc_loss,
+                }
+
+            else:
+                # fql: teacher BC loss + student (Q + distillation) loss.
+                teacher_bc_loss = bc_loss
+
+                # Student FQL loss: Q-guided + distillation from teacher.
+                rng, student_noise_rng = jax.random.split(rng)
+                z = jax.random.normal(student_noise_rng, flat_actions.shape)
+
+                # Student one-step output (gradients flow through student params).
+                a_student = self.network.select('student_actor')(
+                    batch['observations'], batch['actor_goals'],
+                    noise=z,
+                    params=grad_params,
+                )
+                a_student = jnp.clip(a_student, -1, 1)
+
+                # Teacher ODE output from the same noise z (no gradient).
+                a_teacher = self._flow_sample_from_noise(
+                    batch['observations'], batch['actor_goals'], z,
+                )
+                a_teacher = jax.lax.stop_gradient(a_teacher)
+
+                # Q loss: maximize Q(s, a_student), normalized for scale invariance.
+                q1, q2 = self.network.select('critic')(
+                    batch['observations'], batch['actor_goals'], a_student,
+                )
+                q = jnp.minimum(q1, q2)
+                q_loss = -q.mean() / jax.lax.stop_gradient(jnp.abs(q).mean() + 1e-6)
+
+                # Distillation loss: MSE between student output and teacher ODE output.
+                distill_loss = jnp.mean((a_student - a_teacher) ** 2, axis=-1).mean()
+
+                student_loss = q_loss + self.config['alpha'] * distill_loss
+
+                actor_loss = teacher_bc_loss + student_loss
+
+                return actor_loss, {
+                    'actor_loss': actor_loss,
+                    'teacher_bc_loss': teacher_bc_loss,
+                    'student_loss': student_loss,
+                    'q_loss': q_loss,
+                    'distill_loss': distill_loss,
+                    'q_mean': q.mean(),
+                    'q_abs_mean': jnp.abs(q).mean(),
+                    'fm_loss': teacher_bc_loss,
                 }
 
         elif self.config['actor_loss'] == 'ddpgbc':
@@ -270,6 +318,38 @@ class ACCRLAgent(flax.struct.PyTreeNode):
 
         return x
 
+    def _flow_sample_from_noise(self, observations, goals, noise):
+        """Generate actions via Euler ODE integration starting from given noise.
+
+        Unlike _flow_sample, this takes pre-generated noise (not a seed) and
+        always operates on a flat batch. Used during FQL training so teacher
+        and student share the same noise vector z.
+
+        Args:
+            observations: Observations of shape (B, obs_dim).
+            goals: Goals of shape (B, goal_dim) or None.
+            noise: Pre-generated noise of shape (B, action_dim).
+
+        Returns:
+            Actions of shape (B, action_dim).
+        """
+        num_steps = self.config['num_flow_steps']
+        dt = 1.0 / num_steps
+
+        x = noise
+
+        def step_fn(x, step_idx):
+            t = step_idx * dt
+            t_batch = jnp.full((x.shape[0],), t)
+            v = self.network.select('actor')(observations, goals, actions=x, time=t_batch)
+            x = x + v * dt
+            return x, None
+
+        x, _ = jax.lax.scan(step_fn, x, jnp.arange(num_steps))
+        x = jnp.clip(x, -1, 1)
+
+        return x
+
     @jax.jit
     def sample_actions(
         self,
@@ -331,6 +411,53 @@ class ACCRLAgent(flax.struct.PyTreeNode):
             else:
                 # Batched: candidates (N, B, action_dim), best_idx is (B,).
                 actions = candidates[best_idx, jnp.arange(observations.shape[0])]  # (B, action_dim)
+
+        elif self.config['actor_loss'] == 'fql':
+            # FQL: student one-step generation + best-of-N Q-guided selection.
+            N = self.config['best_of_n']
+            action_dim = self.config['total_action_dim']
+
+            unbatched = (observations.ndim == 1)
+            if unbatched:
+                obs_expanded = observations[None]
+                goals_expanded = goals[None] if goals is not None else None
+            else:
+                obs_expanded = observations
+                goals_expanded = goals
+            batch_size = obs_expanded.shape[0]
+
+            # Generate N noise vectors and replicate obs/goals.
+            z = jax.random.normal(seed, (N, batch_size, action_dim))
+            obs_rep = jnp.broadcast_to(
+                obs_expanded[None], (N, batch_size, *obs_expanded.shape[1:])
+            )
+            if goals_expanded is not None:
+                goals_rep = jnp.broadcast_to(
+                    goals_expanded[None], (N, batch_size, *goals_expanded.shape[1:])
+                )
+            else:
+                goals_rep = None
+
+            # Student one-step forward pass via vmap over N dimension.
+            def student_forward(obs, gls, noise):
+                a = self.network.select('student_actor')(obs, gls, noise=noise)
+                return jnp.clip(a, -1, 1)
+
+            candidates = jax.vmap(student_forward)(obs_rep, goals_rep, z)  # (N, B, action_dim)
+
+            # Q evaluation for best-of-N selection.
+            def eval_q(candidate, obs, gls):
+                q1, q2 = self.network.select('critic')(obs, gls, candidate)
+                return jnp.minimum(q1, q2)
+
+            q_vals = jax.vmap(eval_q)(candidates, obs_rep, goals_rep)  # (N, B)
+
+            best_idx = jnp.argmax(q_vals, axis=0)
+            if unbatched:
+                best_idx = best_idx.squeeze()  # (1,) -> scalar
+                actions = candidates[best_idx, 0]  # (action_dim,)
+            else:
+                actions = candidates[best_idx, jnp.arange(batch_size)]  # (B, action_dim)
         else:
             raise ValueError(f'Unsupported actor loss: {self.config["actor_loss"]}')
 
@@ -398,7 +525,7 @@ class ACCRLAgent(flax.struct.PyTreeNode):
                 goal_encoder=encoders.get('value_goal'),
             )
 
-        if config['actor_loss'] in ('awr', 'bestofn'):
+        if config['actor_loss'] in ('awr', 'bestofn', 'fql'):
             # Flow matching actor.
             actor_def = GCFlowMatchingActor(
                 hidden_dims=config['actor_hidden_dims'],
@@ -427,6 +554,21 @@ class ACCRLAgent(flax.struct.PyTreeNode):
             network_info.update(
                 value=(value_def, (ex_observations, ex_goals)),
             )
+        if config['actor_loss'] == 'fql':
+            # Student one-step actor for FQL.
+            if config['encoder'] is not None:
+                encoders['student_actor'] = GCEncoder(concat_encoder=encoder_module())
+            student_actor_def = GCOneStepActor(
+                hidden_dims=config['actor_hidden_dims'],
+                action_dim=action_dim,
+                layer_norm=config['layer_norm'],
+                gc_encoder=encoders.get('student_actor'),
+            )
+            ex_noise = jnp.zeros_like(ex_actions)
+            network_info['student_actor'] = (
+                student_actor_def,
+                (ex_observations, ex_goals, ex_noise),
+            )
         networks = {k: v[0] for k, v in network_info.items()}
         network_args = {k: v[1] for k, v in network_info.items()}
 
@@ -454,8 +596,8 @@ def get_config():
             latent_dim=512,  # Latent dimension for phi and psi.
             layer_norm=True,  # Whether to use layer normalization.
             discount=0.99,  # Discount factor.
-            actor_loss='bestofn',  # Actor loss type ('awr', 'bestofn', or 'ddpgbc').
-            alpha=0.1,  # Temperature in AWR or BC coefficient in DDPG+BC.
+            actor_loss='bestofn',  # Actor loss type ('awr', 'bestofn', 'fql', or 'ddpgbc').
+            alpha=0.1,  # Temperature in AWR, BC coefficient in DDPG+BC, or distillation weight in FQL.
             bc_coef=0.0,  # BC regularization coefficient for flow matching modes (awr).
             const_std=True,  # Whether to use constant standard deviation for the actor (ddpgbc only).
             discrete=False,  # Whether the action space is discrete (not supported with chunk_length > 1).
@@ -465,7 +607,7 @@ def get_config():
             replan_length=ml_collections.config_dict.placeholder(int),  # Steps to execute per chunk before replanning (None = full chunk).
             # Flow matching hyperparameters.
             num_flow_steps=10,  # Number of Euler integration steps for flow matching ODE.
-            best_of_n=1,  # Number of candidates for best-of-N selection (bestofn mode only).
+            best_of_n=1,  # Number of candidates for best-of-N selection (bestofn and fql modes).
             # Dataset hyperparameters.
             dataset_class='ADGCDataset',  # Dataset class name.
             value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
