@@ -21,19 +21,30 @@ from typing import Any, Dict, List
 # Each value is a list of values to sweep over.
 # All combinations will be submitted as separate jobs.
 # ---------------------------------------------------------------------------
+
+# "env_name": [
+#         "humanoidmaze-medium-navigate-v0",
+#         "pointmaze-medium-navigate-v0",
+#         "antmaze-medium-navigate-v0",
+#         "antsoccer-arena-navigate-v0",
+#     ],
+
 GRID: Dict[str, List[Any]] = {
     "seed": [0, 1, 2],
     "env_name": [
+        "pointmaze-medium-navigate-v0",
+        "antmaze-medium-navigate-v0",
         "humanoidmaze-medium-navigate-v0",
     ],
     "agent": [
         "agents/accrl.py",
     ],
     "agent.action_chunk_length": [5],
+    "agent.replan_length": [1],
     "agent.best_of_n": [1],
-    "agent.actor_loss": ["awr"],
-    "agent.alpha": [0.3],
-    "run_group": ["AWR_grid"],
+    "agent.actor_loss": ["fql"],
+    "agent.alpha": [0.1, 1, 10],
+    "run_group": ["FlowQL"],
 }
 
 # Fixed flags added to every job (not swept over)
@@ -56,22 +67,14 @@ SLURM_DEFAULTS = {
 }
 
 
-def get_git_commit() -> str:
-    """Return the current HEAD commit hash. Warn if there are uncommitted changes."""
-    dirty = subprocess.run(
-        ["git", "status", "--porcelain"],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
-    )
-    if dirty.stdout.strip():
-        print("WARNING: Uncommitted changes detected. Running from last commit.")
-        print(dirty.stdout)
-
+def get_git_commit(ref: str = "HEAD") -> str:
+    """Return the full commit hash for the given ref."""
     result = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
+        ["git", "rev-parse", ref],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
     )
     if result.returncode != 0:
-        print(f"ERROR: Could not get git commit hash: {result.stderr.strip()}")
+        print(f"ERROR: Could not resolve commit ref '{ref}': {result.stderr.strip()}")
         sys.exit(1)
     return result.stdout.strip()
 
@@ -137,7 +140,7 @@ def make_sbatch_script(
         "",
         f"# pinned commit: {commit}",
         f"mkdir -p {run_dir}",
-        f"cp -ru ~/one-big-beautiful-trajectory/. {run_dir}/",
+        f"git -C ~/one-big-beautiful-trajectory archive {commit} | tar -x -C {run_dir}",
         f"cd {run_dir}",
         "source $SCRATCH/one-big-beautiful-trajectory/.venv/bin/activate",
         "",
@@ -156,12 +159,13 @@ def main() -> None:
     parser.add_argument("--mem", default=SLURM_DEFAULTS["mem"], help="Memory per job")
     parser.add_argument("--partition", default=SLURM_DEFAULTS["partition"], help="SLURM partition")
     parser.add_argument("--account", default=SLURM_DEFAULTS["account"], help="SLURM account")
+    parser.add_argument("--commit", default="HEAD", help="Git ref (commit hash, branch, tag) to run")
     args = parser.parse_args()
 
     slurm = {**SLURM_DEFAULTS, "time": args.time, "mem": args.mem,
              "partition": args.partition, "account": args.account}
 
-    commit = get_git_commit()
+    commit = get_git_commit(args.commit)
     print(f"Pinning to commit: {commit}")
 
     combos = dict_permutations(GRID)
