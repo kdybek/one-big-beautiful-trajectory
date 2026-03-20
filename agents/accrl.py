@@ -462,6 +462,7 @@ def get_config():
             encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
             # Action chunking hyperparameters.
             action_chunk_length=5,  # Number of consecutive actions per chunk.
+            replan_length=ml_collections.config_dict.placeholder(int),  # Steps to execute per chunk before replanning (None = full chunk).
             # Flow matching hyperparameters.
             num_flow_steps=10,  # Number of Euler integration steps for flow matching ODE.
             best_of_n=1,  # Number of candidates for best-of-N selection (bestofn mode only).

@@ -141,6 +141,7 @@ def main(_):
                     video_frame_skip=FLAGS.video_frame_skip,
                     eval_temperature=FLAGS.eval_temperature,
                     eval_gaussian=FLAGS.eval_gaussian,
+                    replan_length=config.get('replan_length'),
                 )
                 renders.extend(cur_renders)
                 metric_names = ['success']

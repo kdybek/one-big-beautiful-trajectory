@@ -44,6 +44,7 @@ def evaluate(
     video_frame_skip=3,
     eval_temperature=0,
     eval_gaussian=None,
+    replan_length=None,
 ):
     """Evaluate the agent in the environment.
 
@@ -82,7 +83,9 @@ def evaluate(
 
             # Handle action chunks (2D) vs single actions (1D).
             if action_output.ndim == 2:
-                actions_to_execute = action_output
+                chunk_len = action_output.shape[0]
+                effective_replan = chunk_len if replan_length is None else replan_length
+                actions_to_execute = action_output[:effective_replan]
             else:
                 actions_to_execute = action_output[np.newaxis]
 
