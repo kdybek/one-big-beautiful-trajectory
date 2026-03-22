@@ -32,19 +32,19 @@ from typing import Any, Dict, List
 GRID: Dict[str, List[Any]] = {
     "seed": [0, 1, 2],
     "env_name": [
-        "pointmaze-medium-navigate-v0",
-        "antmaze-medium-navigate-v0",
-        "humanoidmaze-medium-navigate-v0",
+        "cube-double-play-v0",
+        "scene-play-v0",
+        "puzzle-3x3-play-v0",
     ],
     "agent": [
         "agents/accrl.py",
     ],
-    "agent.action_chunk_length": [5],
+    "agent.action_chunk_length": [1, 5, 10],
     "agent.replan_length": [1],
     "agent.best_of_n": [1],
     "agent.actor_loss": ["fql"],
-    "agent.alpha": [0.1, 1, 10],
-    "run_group": ["FlowQL"],
+    "agent.alpha": [300],
+    "run_group": ["FlowQL_manip"],
 }
 
 # Fixed flags added to every job (not swept over)

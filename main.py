@@ -21,6 +21,8 @@ from utils.visualization import plot_crl_pca
 
 FLAGS = flags.FLAGS
 
+flags.DEFINE_string('entity', 'cl-probing', 'Wandb entity.')
+flags.DEFINE_string('project', 'obbt', 'Wandb project.')
 flags.DEFINE_string('run_group', 'Debug', 'Run group.')
 flags.DEFINE_integer('seed', 0, 'Random seed.')
 flags.DEFINE_string('env_name', 'antmaze-large-navigate-v0', 'Environment (dataset) name.')
@@ -47,7 +49,7 @@ config_flags.DEFINE_config_file('agent', 'agents/gciql.py', lock_config=False)
 def main(_):
     # Set up logger.
     exp_name = get_exp_name(FLAGS.seed)
-    setup_wandb(project='obbt', group=FLAGS.run_group, name=exp_name)
+    setup_wandb(entity=FLAGS.entity, project=FLAGS.project, group=FLAGS.run_group, name=exp_name)
 
     FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
     os.makedirs(FLAGS.save_dir, exist_ok=True)
