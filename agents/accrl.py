@@ -241,6 +241,30 @@ class ACCRLAgent(flax.struct.PyTreeNode):
         return loss, info
 
     @jax.jit
+    def _action_sensitivity_metrics(self, batch, rng, n_samples=1000):
+        """Measure variance and mean of Q-values over random actions for a fixed (s, g).
+
+        Fixes the first (observation, goal) pair from the batch, samples n_samples random
+        actions uniformly in [-1, 1]^action_dim, and returns var/mean of min(Q1, Q2).
+        """
+        s = batch['observations'][0:1]       # (1, obs_dim)
+        g = batch['value_goals'][0:1]        # (1, goal_dim)
+
+        action_dim = self.config['total_action_dim']
+        random_actions = jax.random.uniform(rng, (n_samples, action_dim), minval=-1.0, maxval=1.0)
+
+        s_rep = jnp.repeat(s, n_samples, axis=0)  # (n_samples, obs_dim)
+        g_rep = jnp.repeat(g, n_samples, axis=0)  # (n_samples, goal_dim)
+
+        q1, q2 = self.network.select('critic')(s_rep, g_rep, random_actions)
+        q = jnp.minimum(q1, q2)
+
+        return {
+            'critic/action_q_var': jnp.var(q),
+            'critic/action_q_mean': jnp.mean(q),
+        }
+
+    @jax.jit
     def update(self, batch):
         """Update the agent and return a new agent with information dictionary."""
         new_rng, rng = jax.random.split(self.rng)
@@ -364,6 +388,8 @@ class ACCRLAgent(flax.struct.PyTreeNode):
             If action_chunk_length > 1: array of shape (*, chunk_length, per_step_action_dim).
             If action_chunk_length == 1: array of shape (*, action_dim) (same as CRL).
         """
+        q_info = None  # set in bestofn branch; triggers tuple return
+
         if self.config['actor_loss'] == 'ddpgbc':
             # Gaussian sampling (unchanged).
             dist = self.network.select('actor')(observations, goals, temperature=temperature)
@@ -402,6 +428,11 @@ class ACCRLAgent(flax.struct.PyTreeNode):
 
             # Unbatched: q_vals (N,); Batched: q_vals (N, B)
             q_vals = jax.vmap(eval_q)(candidates, obs_rep, goals_rep)
+
+            q_info = {
+                'bestofn_q_var': jnp.var(q_vals),
+                'bestofn_q_mean': jnp.mean(q_vals),
+            }
 
             # Select best candidate: argmax over N dimension.
             best_idx = jnp.argmax(q_vals, axis=0)  # scalar or (B,)
@@ -465,6 +496,9 @@ class ACCRLAgent(flax.struct.PyTreeNode):
         chunk_length = self.config['action_chunk_length']
         if chunk_length > 1:
             actions = actions.reshape(*actions.shape[:-1], chunk_length, -1)
+
+        if q_info is not None:
+            return actions, q_info
         return actions
 
     @classmethod

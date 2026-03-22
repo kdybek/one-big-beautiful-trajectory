@@ -79,6 +79,9 @@ def evaluate(
         render = []
         while not done:
             action_output = actor_fn(observations=observation, goals=goal, temperature=eval_temperature)
+            if isinstance(action_output, tuple):
+                action_output, action_info = action_output
+                add_to(stats, {k: float(v) for k, v in action_info.items()})
             action_output = np.array(action_output)
             if action_output.ndim == 3:
                 action_output = action_output.squeeze(0)
