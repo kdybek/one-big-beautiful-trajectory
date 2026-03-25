@@ -420,22 +420,28 @@ class ADGCDataset(GCDataset):
         return batch
 
     def sample_goals(self, idxs, p_curgoal, p_trajgoal, p_randomgoal, geom_sample):
-        """Sample goals at least action_chunk_length transitions ahead of idxs."""
+        """Sample trajectory goals for the given indices.
+
+        When shift_goals=True (default), goals are sampled at least action_chunk_length steps
+        ahead so the goal lies outside the action chunk horizon. When shift_goals=False, goals
+        are sampled in the standard way starting from the current state (offset of 1).
+        """
         batch_size = len(idxs)
 
         # Random goals (any state in the dataset).
         random_goal_idxs = self.dataset.get_random_idxs(batch_size)
 
-        # Trajectory goals: sample at least action_chunk_length steps ahead.
         final_state_idxs = self.terminal_locs[np.searchsorted(self.terminal_locs, idxs)]
-        min_traj_goal_idxs = np.minimum(idxs + self.action_chunk_length, final_state_idxs)
+        shift_goals = self.config.get('shift_goals', True)
+        goal_shift = self.action_chunk_length if shift_goals else 1
 
         if geom_sample:
-            # Geometric sampling offset in [1, inf), shifted by (action_chunk_length - 1).
+            # Geometric sampling offset in [1, inf), optionally shifted by (action_chunk_length - 1).
             offsets = np.random.geometric(p=1 - self.config['discount'], size=batch_size)
-            traj_goal_idxs = np.minimum(idxs + self.action_chunk_length - 1 + offsets, final_state_idxs)
+            traj_goal_idxs = np.minimum(idxs + goal_shift - 1 + offsets, final_state_idxs)
         else:
-            # Uniform sampling between min_traj_goal_idxs and final_state_idxs.
+            # Uniform sampling between (idxs + goal_shift) and final_state_idxs.
+            min_traj_goal_idxs = np.minimum(idxs + goal_shift, final_state_idxs)
             distances = np.random.rand(batch_size)  # in [0, 1)
             traj_goal_idxs = np.round(
                 min_traj_goal_idxs * distances + final_state_idxs * (1 - distances)

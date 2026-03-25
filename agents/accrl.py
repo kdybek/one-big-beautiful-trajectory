@@ -639,6 +639,7 @@ def get_config():
             # Action chunking hyperparameters.
             action_chunk_length=5,  # Number of consecutive actions per chunk.
             replan_length=ml_collections.config_dict.placeholder(int),  # Steps to execute per chunk before replanning (None = full chunk).
+            shift_goals=True,  # Whether to shift goal sampling (action_chunk_length - 1) ahead of the current state.
             # Flow matching hyperparameters.
             num_flow_steps=10,  # Number of Euler integration steps for flow matching ODE.
             best_of_n=1,  # Number of candidates for best-of-N selection (bestofn and fql modes).
