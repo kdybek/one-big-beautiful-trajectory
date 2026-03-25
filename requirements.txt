@@ -1,3 +1,4 @@
+numpy < 2.3.0
 ogbench  # Use the PyPI version of OGBench. Replace this with `pip install -e .` if you want to use the local version.
 jax[cuda12] >= 0.4.26
 flax >= 0.8.4

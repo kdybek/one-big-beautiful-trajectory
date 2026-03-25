@@ -390,7 +390,7 @@ class GCBilinearValue(nn.Module):
         else:
             return v
 
-    def __call__(self, observations, goals, far_goals=None, actions=None, info=False):
+    def __call__(self, observations, goals, actions=None, info=False, far_goals=None):
         """Return the value/critic function.
 
         Args:
@@ -422,6 +422,12 @@ class GCBilinearValue(nn.Module):
 
         phi = self.phi(phi_inputs)
         psi = self.psi(psi_inputs)
+
+        if self.subgoals and self.is_mutable_collection("params"):  # Ensure inbetween_psi is initialized when subgoal training is enabled.
+            dummy = jnp.zeros_like(goals)
+            if self.inbetween_encoder is not None:
+                dummy = self.inbetween_encoder(dummy)
+            _ = self.inbetween_psi(dummy)
 
         v = (phi * psi / jnp.sqrt(self.latent_dim)).sum(axis=-1)
 

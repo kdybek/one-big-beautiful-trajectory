@@ -80,6 +80,7 @@ class CRLAgent(flax.struct.PyTreeNode):
                 in_axes=-1,
                 out_axes=-1,
             )(logits_2)
+            logits = logits_1
             contrastive_loss = jnp.mean(contrastive_loss_1) + jnp.mean(contrastive_loss_2)
 
         # Compute additional statistics.
