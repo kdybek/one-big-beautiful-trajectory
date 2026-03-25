@@ -229,6 +229,13 @@ class GCDataset:
             self.config['value_p_randomgoal'],
             self.config['value_geom_sample'],
         )
+        value_far_goal_idxs = self.sample_goals(
+            value_goal_idxs,
+            self.config['value_p_curgoal'],
+            self.config['value_p_trajgoal'],
+            self.config['value_p_randomgoal'],
+            self.config['value_geom_sample'],
+        )
         actor_goal_idxs = self.sample_goals(
             idxs,
             self.config['actor_p_curgoal'],
@@ -238,6 +245,7 @@ class GCDataset:
         )
 
         batch['value_goals'] = self.get_observations(value_goal_idxs)
+        batch['value_far_goals'] = self.get_observations(value_far_goal_idxs)
         batch['actor_goals'] = self.get_observations(actor_goal_idxs)
         successes = (idxs == value_goal_idxs).astype(float)
         batch['masks'] = 1.0 - successes
@@ -245,7 +253,7 @@ class GCDataset:
 
         if self.config['p_aug'] is not None and not evaluation:
             if np.random.rand() < self.config['p_aug']:
-                self.augment(batch, ['observations', 'next_observations', 'value_goals', 'actor_goals'])
+                self.augment(batch, ['observations', 'next_observations', 'value_goals', 'value_far_goals', 'actor_goals'])
 
         return batch
 

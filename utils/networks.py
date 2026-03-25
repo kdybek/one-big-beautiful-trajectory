@@ -347,8 +347,10 @@ class GCBilinearValue(nn.Module):
     ensemble: bool = True
     value_exp: bool = False
     probabilistic_reps: bool = False
+    subgoals: bool = False
     state_encoder: nn.Module = None
     goal_encoder: nn.Module = None
+    inbetween_encoder: nn.Module = None
 
     def setup(self):
         mlp_module = MLP
@@ -357,8 +359,38 @@ class GCBilinearValue(nn.Module):
 
         self.phi = mlp_module((*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
         self.psi = mlp_module((*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
+        self.inbetween_psi = mlp_module((*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
 
-    def __call__(self, observations, goals, actions=None, info=False):
+    def subgoal_training_call(self, observations, inbetween_goals, far_goals, actions=None, info=False):
+        if self.state_encoder is not None:
+            observations = self.state_encoder(observations)
+        if self.goal_encoder is not None:
+            far_goals = self.goal_encoder(far_goals)
+        if self.inbetween_encoder is not None:
+            inbetween_goals = self.inbetween_encoder(inbetween_goals)
+
+        if actions is None:
+            phi_inputs = observations
+        else:
+            phi_inputs = jnp.concatenate([observations, actions], axis=-1)
+
+        psi_inputs = jnp.concatenate([observations, far_goals], axis=-1)
+
+        phi = self.phi(phi_inputs)
+        psi = self.psi(psi_inputs)
+        inbetween_psi = self.inbetween_psi(inbetween_goals)
+
+        v = (phi * psi / jnp.sqrt(self.latent_dim)).sum(axis=-1)
+
+        if self.value_exp:
+            v = jnp.exp(v)
+
+        if info:
+            return v, phi, psi, inbetween_psi
+        else:
+            return v
+
+    def __call__(self, observations, goals, far_goals=None, actions=None, info=False):
         """Return the value/critic function.
 
         Args:
@@ -367,6 +399,12 @@ class GCBilinearValue(nn.Module):
             actions: Actions (optional).
             info: Whether to additionally return the representations phi and psi.
         """
+        if self.probabilistic_reps:
+            raise NotImplementedError('Probabilistic representations are not reasearched now.')
+
+        if far_goals is not None and self.subgoals:
+            return self.subgoal_training_call(observations, goals, far_goals, actions, info)
+
         if self.state_encoder is not None:
             observations = self.state_encoder(observations)
         if self.goal_encoder is not None:
@@ -377,18 +415,15 @@ class GCBilinearValue(nn.Module):
         else:
             phi_inputs = jnp.concatenate([observations, actions], axis=-1)
 
-        phi = self.phi(phi_inputs)
-        psi = self.psi(goals)
-
-        if self.probabilistic_reps:
-            phi_mean = phi[..., : self.latent_dim // 2]
-            psi_mean = psi[..., : self.latent_dim // 2]
-
-
-            dimension = self.latent_dim // 2
-            v = (phi_mean * psi_mean / jnp.sqrt(dimension)).sum(axis=-1)
+        if self.subgoals:
+            psi_inputs = jnp.concatenate([observations, goals], axis=-1)
         else:
-            v = (phi * psi / jnp.sqrt(self.latent_dim)).sum(axis=-1)
+            psi_inputs = goals
+
+        phi = self.phi(phi_inputs)
+        psi = self.psi(psi_inputs)
+
+        v = (phi * psi / jnp.sqrt(self.latent_dim)).sum(axis=-1)
 
         if self.value_exp:
             v = jnp.exp(v)

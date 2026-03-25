@@ -25,29 +25,62 @@ class CRLAgent(flax.struct.PyTreeNode):
         """Compute the contrastive value loss for the Q or V function."""
         batch_size = batch['observations'].shape[0]
 
-        if module_name == 'critic':
-            actions = batch['actions']
+        if not self.config['subgoals']:
+            if module_name == 'critic':
+                actions = batch['actions']
+            else:
+                actions = None
+            v, phi, psi = self.network.select(module_name)(
+                batch['observations'],
+                batch['value_goals'],
+                actions=actions,
+                info=True,
+                params=grad_params,
+            )
+            if len(phi.shape) == 2:  # Non-ensemble.
+                phi = phi[None, ...]
+                psi = psi[None, ...]
+            logits = jnp.einsum('eik,ejk->ije', phi, psi) / jnp.sqrt(phi.shape[-1])
+            # logits.shape is (B, B, e) with one term for positive pair and (B - 1) terms for negative pairs in each row.
+            I = jnp.eye(batch_size)
+            contrastive_loss = jax.vmap(
+                lambda _logits: optax.sigmoid_binary_cross_entropy(logits=_logits, labels=I),
+                in_axes=-1,
+                out_axes=-1,
+            )(logits)
+            contrastive_loss = jnp.mean(contrastive_loss)
         else:
-            actions = None
-        v, phi, psi = self.network.select(module_name)(
-            batch['observations'],
-            batch['value_goals'],
-            actions=actions,
-            info=True,
-            params=grad_params,
-        )
-        if len(phi.shape) == 2:  # Non-ensemble.
-            phi = phi[None, ...]
-            psi = psi[None, ...]
-        logits = jnp.einsum('eik,ejk->ije', phi, psi) / jnp.sqrt(phi.shape[-1])
-        # logits.shape is (B, B, e) with one term for positive pair and (B - 1) terms for negative pairs in each row.
-        I = jnp.eye(batch_size)
-        contrastive_loss = jax.vmap(
-            lambda _logits: optax.sigmoid_binary_cross_entropy(logits=_logits, labels=I),
-            in_axes=-1,
-            out_axes=-1,
-        )(logits)
-        contrastive_loss = jnp.mean(contrastive_loss)
+            if module_name == 'critic':
+                actions = batch['actions']
+            else:
+                actions = None
+            v, phi, psi, psi_inbetween = self.network.select(module_name)(
+                batch['observations'],
+                batch['value_goals'],
+                far_goals=batch['value_far_goals'],
+                actions=actions,
+                info=True,
+                params=grad_params,
+            )
+            if len(phi.shape) == 2:  # Non-ensemble.
+                phi = phi[None, ...]
+                psi = psi[None, ...]
+                psi_inbetween = psi_inbetween[None, ...]
+            logits_1 = jnp.einsum('eik,ejk->ije', phi, psi_inbetween) / jnp.sqrt(phi.shape[-1])
+            logits_2 = jnp.einsum('eik,ejk->ije', psi_inbetween, psi) / jnp.sqrt(phi.shape[-1])
+            # logits.shape is (B, B, e) with one term for positive pair and (B - 1) terms for negative pairs in each row.
+            I = jnp.eye(batch_size)
+            contrastive_loss_1 = jax.vmap(
+                lambda _logits: optax.sigmoid_binary_cross_entropy(logits=_logits, labels=I),
+                in_axes=-1,
+                out_axes=-1,
+            )(logits_1)
+            contrastive_loss_2 = jax.vmap(
+                lambda _logits: optax.sigmoid_binary_cross_entropy(logits=_logits, labels=I),
+                in_axes=-1,
+                out_axes=-1,
+            )(logits_2)
+            contrastive_loss = jnp.mean(contrastive_loss_1) + jnp.mean(contrastive_loss_2)
 
         # Compute additional statistics.
         v = jnp.exp(v)
@@ -215,8 +248,11 @@ class CRLAgent(flax.struct.PyTreeNode):
             encoder_module = encoder_modules[config['encoder']]
             encoders['critic_state'] = encoder_module()
             encoders['critic_goal'] = encoder_module()
+            encoders['critic_inbetween'] = encoder_module() if config['subgoals'] else None
             encoders['actor'] = GCEncoder(concat_encoder=encoder_module())
             if config['actor_loss'] == 'awr':
+                if config['subgoals']:
+                    raise NotImplementedError('Subgoal encoders are not implemented for the value function in AWR mode.')
                 encoders['value_state'] = encoder_module()
                 encoders['value_goal'] = encoder_module()
 
@@ -239,8 +275,10 @@ class CRLAgent(flax.struct.PyTreeNode):
                 layer_norm=config['layer_norm'],
                 ensemble=True,
                 value_exp=False,
+                subgoals=config['subgoals'],
                 state_encoder=encoders.get('critic_state'),
                 goal_encoder=encoders.get('critic_goal'),
+                inbetween_encoder=encoders.get('critic_inbetween'),
             )
 
         if config['actor_loss'] == 'awr':
@@ -300,6 +338,7 @@ def get_config():
             value_hidden_dims=(512, 512, 512),  # Value network hidden dimensions.
             latent_dim=512,  # Latent dimension for phi and psi.
             layer_norm=True,  # Whether to use layer normalization.
+            subgoals=False,  # Whether to use subgoal representations in the critic.
             discount=0.99,  # Discount factor.
             actor_loss='ddpgbc',  # Actor loss type ('awr' or 'ddpgbc').
             alpha=0.1,  # Temperature in AWR or BC coefficient in DDPG+BC.
