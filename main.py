@@ -156,15 +156,15 @@ def main(_):
             eval_logger.log(eval_metrics, step=i)
 
             agent_name = config['agent_name']
-            if agent_name in ['crl', 'rpcrl']:
-                plot_crl_pca(
-                    agent=eval_agent,
-                    dataset=val_dataset if val_dataset is not None else train_dataset,
-                    n_traj=5,
-                    n_states=10,
-                    prob_reps=True if agent_name == 'rpcrl' else False,
-                    logger=wandb,
-                )
+            #if agent_name in ['crl', 'rpcrl']:
+                #plot_crl_pca(
+                #    agent=eval_agent,
+                #    dataset=val_dataset if val_dataset is not None else train_dataset,
+                #    n_traj=5,
+                #    n_states=10,
+                #    prob_reps=True if agent_name == 'rpcrl' else False,
+                #    logger=wandb,
+                #)
 
         # Save agent.
         if i % FLAGS.save_interval == 0:

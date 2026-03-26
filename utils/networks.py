@@ -348,6 +348,7 @@ class GCBilinearValue(nn.Module):
     value_exp: bool = False
     probabilistic_reps: bool = False
     subgoals: bool = False
+    normalize_reps: bool = False
     state_encoder: nn.Module = None
     goal_encoder: nn.Module = None
     inbetween_encoder: nn.Module = None
@@ -379,6 +380,11 @@ class GCBilinearValue(nn.Module):
         phi = self.phi(phi_inputs)
         psi = self.psi(psi_inputs)
         inbetween_psi = self.inbetween_psi(inbetween_goals)
+
+        if self.normalize_reps:
+            phi = phi / jnp.linalg.norm(phi, axis=-1, keepdims=True)
+            psi = psi / jnp.linalg.norm(psi, axis=-1, keepdims=True)
+            inbetween_psi = inbetween_psi / jnp.linalg.norm(inbetween_psi, axis=-1, keepdims=True)
 
         v = (phi * psi / jnp.sqrt(self.latent_dim)).sum(axis=-1)
 
@@ -422,6 +428,10 @@ class GCBilinearValue(nn.Module):
 
         phi = self.phi(phi_inputs)
         psi = self.psi(psi_inputs)
+
+        if self.normalize_reps:
+            phi = phi / jnp.linalg.norm(phi, axis=-1, keepdims=True)
+            psi = psi / jnp.linalg.norm(psi, axis=-1, keepdims=True)
 
         if self.subgoals and self.is_mutable_collection("params"):  # Ensure inbetween_psi is initialized when subgoal training is enabled.
             dummy = jnp.zeros_like(goals)
