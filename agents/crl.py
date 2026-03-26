@@ -57,9 +57,10 @@ class CRLAgent(flax.struct.PyTreeNode):
             in_axes=-1,
             out_axes=-1,
         )(logits_subgoal)
-        contrastive_loss_main = jnp.mean(contrastive_loss_main, axis=-1)
-        contrastive_loss_subgoal = jnp.mean(contrastive_loss_subgoal, axis=-1)
-        contrastive_loss = contrastive_loss_main + contrastive_loss_subgoal
+        contrastive_loss_main = jnp.mean(contrastive_loss_main)
+        contrastive_loss_subgoal = jnp.mean(contrastive_loss_subgoal)
+        consistency_loss = jnp.mean((logits_main - logits_subgoal) ** 2)
+        total_loss = contrastive_loss_main + contrastive_loss_subgoal + consistency_loss
 
         # Compute additional statistics.
         v = jnp.exp(v)
@@ -73,10 +74,11 @@ class CRLAgent(flax.struct.PyTreeNode):
         logits_pos_subgoal = jnp.sum(logits_subgoal * I) / jnp.sum(I)
         logits_neg_subgoal = jnp.sum(logits_subgoal * (1 - I)) / jnp.sum(1 - I)
 
-        return contrastive_loss, {
-            'contrastive_loss': contrastive_loss,
+        return total_loss, {
+            'total_loss': total_loss,
             'contrastive_loss_main': contrastive_loss_main,
             'contrastive_loss_subgoal': contrastive_loss_subgoal,
+            'consistency_loss': consistency_loss,
             'v_mean': v.mean(),
             'v_max': v.max(),
             'v_min': v.min(),
