@@ -242,26 +242,54 @@ class ACCRLAgent(flax.struct.PyTreeNode):
 
     @jax.jit
     def _action_sensitivity_metrics(self, batch, rng, n_samples=1000):
-        """Measure variance and mean of Q-values over random actions for a fixed (s, g).
+        """Measure Q-value statistics and critic sensitivity to actions.
 
-        Fixes the first (observation, goal) pair from the batch, samples n_samples random
-        actions uniformly in [-1, 1]^action_dim, and returns var/mean of min(Q1, Q2).
+        Computes:
+        - Var/mean of Q over random uniform actions at a fixed (s, g).
+        - ||grad_a Q(s,a)|| / sqrt(action_dim) at the current policy action (flow sample).
+        - ||grad_a Q(s,a)|| / sqrt(action_dim) averaged over batch actions from the replay buffer.
         """
         s = batch['observations'][0:1]       # (1, obs_dim)
         g = batch['value_goals'][0:1]        # (1, goal_dim)
-
         action_dim = self.config['total_action_dim']
-        random_actions = jax.random.uniform(rng, (n_samples, action_dim), minval=-1.0, maxval=1.0)
 
-        s_rep = jnp.repeat(s, n_samples, axis=0)  # (n_samples, obs_dim)
-        g_rep = jnp.repeat(g, n_samples, axis=0)  # (n_samples, goal_dim)
-
+        # --- Q variance over random uniform actions ---
+        rng, uniform_rng = jax.random.split(rng)
+        random_actions = jax.random.uniform(uniform_rng, (n_samples, action_dim), minval=-1.0, maxval=1.0)
+        s_rep = jnp.repeat(s, n_samples, axis=0)
+        g_rep = jnp.repeat(g, n_samples, axis=0)
         q1, q2 = self.network.select('critic')(s_rep, g_rep, random_actions)
         q = jnp.minimum(q1, q2)
+
+        # --- grad_a Q at policy action (student actor, consistent with evaluation) ---
+        rng, noise_rng = jax.random.split(rng)
+        z = jax.random.normal(noise_rng, (1, action_dim))
+        policy_action = self.network.select('student_actor')(s, g, noise=z)
+        policy_action = jnp.clip(policy_action, -1, 1)  # (1, action_dim)
+
+        def q_fn_policy(a):
+            q1, q2 = self.network.select('critic')(s, g, a)
+            return jnp.minimum(q1, q2).squeeze()
+
+        grad_policy = jax.grad(q_fn_policy)(policy_action)   # (1, action_dim)
+        grad_norm_policy = jnp.linalg.norm(grad_policy) / jnp.sqrt(action_dim)
+
+        # --- grad_a Q averaged over batch actions ---
+        flat_actions = batch['action_chunks'].reshape(batch['action_chunks'].shape[0], -1)
+
+        def q_fn_single(s_i, g_i, a_i):
+            q1, q2 = self.network.select('critic')(s_i[None], g_i[None], a_i[None])
+            return jnp.minimum(q1, q2).squeeze()
+
+        grad_fn = jax.grad(q_fn_single, argnums=2)
+        grad_batch = jax.vmap(grad_fn)(batch['observations'], batch['value_goals'], flat_actions)
+        grad_norm_batch = jnp.mean(jnp.linalg.norm(grad_batch, axis=-1)) / jnp.sqrt(action_dim)
 
         return {
             'critic/action_q_var': jnp.var(q),
             'critic/action_q_mean': jnp.mean(q),
+            'critic/grad_norm_policy_action': grad_norm_policy,
+            'critic/grad_norm_batch_action': grad_norm_batch,
         }
 
     @jax.jit
