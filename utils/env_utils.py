@@ -76,19 +76,27 @@ class FrameStackWrapper(gymnasium.Wrapper):
         return self.get_observation(), reward, terminated, truncated, info
 
 
-def make_env_and_datasets(dataset_name, frame_stack=None):
+def make_env_and_datasets(dataset_name, frame_stack=None, dataset_path=None):
     """Make OGBench environment and datasets.
 
     Args:
-        dataset_name: Name of the dataset.
+        dataset_name: Name of the dataset. Used to construct the environment and, when
+            dataset_path is None, to download the dataset automatically.
         frame_stack: Number of frames to stack.
+        dataset_path: Optional path to a custom .npz dataset file. When provided, skips
+            the auto-download and loads from this path instead. The validation split is
+            expected at the same path with '.npz' replaced by '-val.npz'. The dataset_name
+            must still be a valid OGBench name so the correct environment is constructed
+            (e.g. 'cube-single-noisy-v0' when using a custom cube-single noisy dataset).
 
     Returns:
         A tuple of the environment, training dataset, and validation dataset.
     """
     # Use compact dataset to save memory.
     dataset_dir = os.environ.get('OGBENCH_DATA_DIR', '~/.ogbench/data')
-    env, train_dataset, val_dataset = ogbench.make_env_and_datasets(dataset_name, compact_dataset=True, dataset_dir=dataset_dir)
+    env, train_dataset, val_dataset = ogbench.make_env_and_datasets(
+        dataset_name, compact_dataset=True, dataset_dir=dataset_dir, dataset_path=dataset_path
+    )
     train_dataset = Dataset.create(**train_dataset)
     val_dataset = Dataset.create(**val_dataset)
 
