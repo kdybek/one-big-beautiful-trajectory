@@ -261,11 +261,17 @@ class ACCRLAgent(flax.struct.PyTreeNode):
         q1, q2 = self.network.select('critic')(s_rep, g_rep, random_actions)
         q = jnp.minimum(q1, q2)
 
-        # --- grad_a Q at policy action (student actor, consistent with evaluation) ---
+        # --- grad_a Q at policy action (consistent with evaluation per actor_loss) ---
         rng, noise_rng = jax.random.split(rng)
-        z = jax.random.normal(noise_rng, (1, action_dim))
-        policy_action = self.network.select('student_actor')(s, g, noise=z)
-        policy_action = jnp.clip(policy_action, -1, 1)  # (1, action_dim)
+        if self.config['actor_loss'] == 'fql':
+            z = jax.random.normal(noise_rng, (1, action_dim))
+            policy_action = self.network.select('student_actor')(s, g, noise=z)
+            policy_action = jnp.clip(policy_action, -1, 1)  # (1, action_dim)
+        elif self.config['actor_loss'] in ('awr', 'bestofn'):
+            policy_action = self._flow_sample(s, g, noise_rng, num_samples=1)  # (1, action_dim), s is batched
+        else:  # ddpgbc
+            dist = self.network.select('actor')(s, g)
+            policy_action = jnp.clip(dist.mode(), -1, 1)  # (1, action_dim)
 
         def q_fn_policy(a):
             q1, q2 = self.network.select('critic')(s, g, a)
@@ -665,9 +671,9 @@ def get_config():
             discrete=False,  # Whether the action space is discrete (not supported with chunk_length > 1).
             encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
             # Action chunking hyperparameters.
-            action_chunk_length=5,  # Number of consecutive actions per chunk.
+            action_chunk_length=1,  # Number of consecutive actions per chunk.
             replan_length=ml_collections.config_dict.placeholder(int),  # Steps to execute per chunk before replanning (None = full chunk).
-            shift_goals=True,  # Whether to shift goal sampling (action_chunk_length - 1) ahead of the current state.
+            shift_goals=False,  # Whether to shift goal sampling (action_chunk_length - 1) ahead of the current state.
             # Flow matching hyperparameters.
             num_flow_steps=10,  # Number of Euler integration steps for flow matching ODE.
             best_of_n=1,  # Number of candidates for best-of-N selection (bestofn and fql modes).
