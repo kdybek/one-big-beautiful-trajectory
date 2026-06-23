@@ -493,6 +493,47 @@ class GCBilinearValue(nn.Module):
             return v
 
 
+class GCBilinearPhi(nn.Module):
+    """Phi-only bilinear representation for the decoupled Q-chunking (DQC) critic.
+
+    Computes only the state-action representation phi(s, a) with the same architecture as
+    ``GCBilinearValue.phi``. The DQC value is formed externally as
+    phi(s, a)^T psi(g) / sqrt(d), reusing psi (the goal representation) from the standard
+    critic, so that only the (s, a) encoder is trained here.
+
+    Attributes:
+        hidden_dims: Hidden layer dimensions.
+        latent_dim: Latent dimension (must match the standard critic's latent_dim).
+        layer_norm: Whether to apply layer normalization.
+        ensemble: Whether to ensemble (must match the standard critic).
+        state_encoder: Optional state encoder (trained as part of the DQC critic).
+    """
+
+    hidden_dims: Sequence[int]
+    latent_dim: int
+    layer_norm: bool = True
+    ensemble: bool = True
+    state_encoder: nn.Module = None
+
+    def setup(self):
+        mlp_module = MLP
+        if self.ensemble:
+            mlp_module = ensemblize(mlp_module, 2)
+        self.phi = mlp_module((*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
+
+    def __call__(self, observations, actions):
+        """Return phi(s, a).
+
+        Args:
+            observations: Observations.
+            actions: Flattened (decoupled) action chunk.
+        """
+        if self.state_encoder is not None:
+            observations = self.state_encoder(observations)
+        phi_inputs = jnp.concatenate([observations, actions], axis=-1)
+        return self.phi(phi_inputs)
+
+
 class GCDiscreteBilinearCritic(GCBilinearValue):
     """Goal-conditioned bilinear critic for discrete actions."""
 

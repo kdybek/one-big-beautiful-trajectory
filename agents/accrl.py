@@ -7,7 +7,7 @@ import ml_collections
 import optax
 from utils.encoders import GCEncoder, encoder_modules
 from utils.flax_utils import ModuleDict, TrainState, nonpytree_field
-from utils.networks import GCActor, GCBilinearValue, GCFlowMatchingActor, GCOneStepActor
+from utils.networks import GCActor, GCBilinearPhi, GCBilinearValue, GCFlowMatchingActor, GCOneStepActor
 
 
 class ACCRLAgent(flax.struct.PyTreeNode):
@@ -22,6 +22,13 @@ class ACCRLAgent(flax.struct.PyTreeNode):
     flattened action chunks. AWR, best-of-N, and FQL modes use a flow matching actor instead
     of a Gaussian actor. FQL additionally trains a one-step student policy distilled from the
     flow teacher and guided by the CRL critic, enabling fast best-of-N inference.
+
+    Decoupled Q-chunking (DQC): when ``decoupled_action_chunk_length`` (dacl) is set
+    (dacl <= action_chunk_length), the standard critic is still trained on the full chunk,
+    but an additional critic phi_dqc(s, a_{1:dacl}) is distilled from it via expectile
+    regression (parameter ``kappa_dqc``), reusing the standard critic's goal representation
+    psi(g). The actor then outputs dacl-length chunks and is guided by this DQC critic, while
+    replanning still operates on the actor's dacl output.
     """
 
     rng: Any
@@ -76,10 +83,77 @@ class ACCRLAgent(flax.struct.PyTreeNode):
             'logits': logits.mean(),
         }
 
+    def _dqc_q_values(self, observations, goals, actions):
+        """Decoupled Q-chunking critic value: Q = phi_dqc(s, a_{1:dacl})^T psi(g) / sqrt(d).
+
+        psi (the goal representation) is reused from the standard critic and detached, so
+        only the DQC phi network is exercised here. Returns the (q1, q2) ensemble values.
+        """
+        # A zero reference chunk of the standard critic's action dimension is only needed to
+        # satisfy the standard critic's phi input shape when extracting psi; psi does not
+        # depend on the actions.
+        ref = jnp.zeros((*actions.shape[:-1], self.config['critic_action_dim']))
+        _, _, psi = self.network.select('critic')(observations, goals, ref, info=True)
+        psi = jax.lax.stop_gradient(psi)  # (2, B, d) for the ensemble critic.
+        phi = self.network.select('dqc_phi')(observations, actions)  # (2, B, d)
+        q = (phi * psi / jnp.sqrt(phi.shape[-1])).sum(axis=-1)  # (2, B)
+        return q[0], q[1]
+
+    def _q_for_actor(self, observations, goals, actions):
+        """Q values used to guide the actor: DQC critic when enabled, else the standard critic."""
+        if self.config['decoupled_action_chunk_length'] is None:
+            return self.network.select('critic')(observations, goals, actions)
+        return self._dqc_q_values(observations, goals, actions)
+
+    def dqc_critic_loss(self, batch, grad_params):
+        """Expectile regression distilling the full critic into the decoupled (DQC) critic.
+
+        Trains phi_dqc(s, a_{1:dacl}) so that Q_dqc approximates an upper expectile of the
+        full critic Q_full(s, a_{1:acl}, g):
+
+            L = f^{kappa}_expectile( Q_full(s, a_{1:acl}, g) - Q_dqc(s, a_{1:dacl}, g) ),
+
+        where Q_full and psi(g) are detached (only phi_dqc is trained). With kappa close to 1
+        this pushes Q_dqc toward the max over the dropped continuation actions a_{dacl+1:acl}.
+        """
+        batch_size = batch['observations'].shape[0]
+        dacl = self.config['decoupled_action_chunk_length']
+
+        full_actions = batch['action_chunks'].reshape(batch_size, -1)
+        dec_actions = batch['action_chunks'][:, :dacl].reshape(batch_size, -1)
+
+        # Full critic value and goal representation (fixed targets; no gradient flows here).
+        v_full, _, psi = self.network.select('critic')(
+            batch['observations'], batch['value_goals'], full_actions, info=True,
+        )
+        v_full = jax.lax.stop_gradient(v_full)  # (2, B)
+        psi = jax.lax.stop_gradient(psi)        # (2, B, d)
+
+        phi_dec = self.network.select('dqc_phi')(
+            batch['observations'], dec_actions, params=grad_params,
+        )  # (2, B, d)
+        q_dec = (phi_dec * psi / jnp.sqrt(phi_dec.shape[-1])).sum(axis=-1)  # (2, B)
+
+        residual = v_full - q_dec
+        kappa = self.config['kappa_dqc']
+        weight = jnp.where(residual > 0, kappa, 1.0 - kappa)
+        dqc_loss = (weight * residual ** 2).mean()
+
+        return dqc_loss, {
+            'dqc_loss': dqc_loss,
+            'q_full_mean': v_full.mean(),
+            'q_dec_mean': q_dec.mean(),
+            'residual_mean': residual.mean(),
+        }
+
     def actor_loss(self, batch, grad_params, rng=None):
         """Compute the actor loss (AWR / best-of-N / FQL flow matching, or DDPG+BC Gaussian)."""
-        # Flatten action chunks for all actor loss computations.
-        flat_actions = batch['action_chunks'].reshape(batch['action_chunks'].shape[0], -1)
+        # Flatten the BC target from the dataset. The dataset always provides the full
+        # action_chunk_length chunk; under DQC the actor outputs the first
+        # decoupled_action_chunk_length actions, so slice the target to match.
+        dacl = self.config['decoupled_action_chunk_length']
+        chunks = batch['action_chunks'] if dacl is None else batch['action_chunks'][:, :dacl]
+        flat_actions = chunks.reshape(chunks.shape[0], -1)
 
         if self.config['actor_loss'] in ('awr', 'bestofn', 'fql'):
             # Flow matching velocity regression (behavioral cloning component).
@@ -109,7 +183,7 @@ class ACCRLAgent(flax.struct.PyTreeNode):
                 # The first term biases toward high-advantage actions;
                 # the second term (behavior constraint) keeps the policy close to π_β.
                 v = self.network.select('value')(batch['observations'], batch['actor_goals'])
-                q1, q2 = self.network.select('critic')(batch['observations'], batch['actor_goals'], flat_actions)
+                q1, q2 = self._q_for_actor(batch['observations'], batch['actor_goals'], flat_actions)
                 q = jnp.minimum(q1, q2)
                 adv = q - v
 
@@ -160,9 +234,7 @@ class ACCRLAgent(flax.struct.PyTreeNode):
                 a_teacher = jax.lax.stop_gradient(a_teacher)
 
                 # Q loss: maximize Q(s, a_student), normalized for scale invariance.
-                q1, q2 = self.network.select('critic')(
-                    batch['observations'], batch['actor_goals'], a_student,
-                )
+                q1, q2 = self._q_for_actor(batch['observations'], batch['actor_goals'], a_student)
                 q = jnp.minimum(q1, q2)
                 q_loss = -q.mean() / jax.lax.stop_gradient(jnp.abs(q).mean() + 1e-6)
 
@@ -191,7 +263,7 @@ class ACCRLAgent(flax.struct.PyTreeNode):
                 q_actions = jnp.clip(dist.mode(), -1, 1)
             else:
                 q_actions = jnp.clip(dist.sample(seed=rng), -1, 1)
-            q1, q2 = self.network.select('critic')(batch['observations'], batch['actor_goals'], q_actions)
+            q1, q2 = self._q_for_actor(batch['observations'], batch['actor_goals'], q_actions)
             q = jnp.minimum(q1, q2)
 
             # Normalize Q values by the absolute mean to make the loss scale invariant.
@@ -225,6 +297,13 @@ class ACCRLAgent(flax.struct.PyTreeNode):
         for k, v in critic_info.items():
             info[f'critic/{k}'] = v
 
+        if self.config['decoupled_action_chunk_length'] is not None:
+            dqc_loss, dqc_info = self.dqc_critic_loss(batch, grad_params)
+            for k, v in dqc_info.items():
+                info[f'dqc/{k}'] = v
+        else:
+            dqc_loss = 0.0
+
         if self.config['actor_loss'] == 'awr':
             value_loss, value_info = self.contrastive_loss(batch, grad_params, 'value')
             for k, v in value_info.items():
@@ -237,7 +316,7 @@ class ACCRLAgent(flax.struct.PyTreeNode):
         for k, v in actor_info.items():
             info[f'actor/{k}'] = v
 
-        loss = critic_loss + value_loss + actor_loss
+        loss = critic_loss + value_loss + actor_loss + dqc_loss
         return loss, info
 
     @jax.jit
@@ -258,7 +337,7 @@ class ACCRLAgent(flax.struct.PyTreeNode):
         random_actions = jax.random.uniform(uniform_rng, (n_samples, action_dim), minval=-1.0, maxval=1.0)
         s_rep = jnp.repeat(s, n_samples, axis=0)
         g_rep = jnp.repeat(g, n_samples, axis=0)
-        q1, q2 = self.network.select('critic')(s_rep, g_rep, random_actions)
+        q1, q2 = self._q_for_actor(s_rep, g_rep, random_actions)
         q = jnp.minimum(q1, q2)
 
         # --- grad_a Q at policy action (consistent with evaluation per actor_loss) ---
@@ -274,17 +353,20 @@ class ACCRLAgent(flax.struct.PyTreeNode):
             policy_action = jnp.clip(dist.mode(), -1, 1)  # (1, action_dim)
 
         def q_fn_policy(a):
-            q1, q2 = self.network.select('critic')(s, g, a)
+            q1, q2 = self._q_for_actor(s, g, a)
             return jnp.minimum(q1, q2).squeeze()
 
         grad_policy = jax.grad(q_fn_policy)(policy_action)   # (1, action_dim)
         grad_norm_policy = jnp.linalg.norm(grad_policy) / jnp.sqrt(action_dim)
 
         # --- grad_a Q averaged over batch actions ---
-        flat_actions = batch['action_chunks'].reshape(batch['action_chunks'].shape[0], -1)
+        # Slice the dataset chunk to the actor's action dimension under DQC.
+        dacl = self.config['decoupled_action_chunk_length']
+        chunks = batch['action_chunks'] if dacl is None else batch['action_chunks'][:, :dacl]
+        flat_actions = chunks.reshape(chunks.shape[0], -1)
 
         def q_fn_single(s_i, g_i, a_i):
-            q1, q2 = self.network.select('critic')(s_i[None], g_i[None], a_i[None])
+            q1, q2 = self._q_for_actor(s_i[None], g_i[None], a_i[None])
             return jnp.minimum(q1, q2).squeeze()
 
         grad_fn = jax.grad(q_fn_single, argnums=2)
@@ -457,7 +539,7 @@ class ACCRLAgent(flax.struct.PyTreeNode):
 
             # Compute Q values for all N candidates via vmap over N.
             def eval_q(candidate, obs, gls):
-                q1, q2 = self.network.select('critic')(obs, gls, candidate)
+                q1, q2 = self._q_for_actor(obs, gls, candidate)
                 return jnp.minimum(q1, q2)
 
             # Unbatched: q_vals (N,); Batched: q_vals (N, B)
@@ -512,7 +594,7 @@ class ACCRLAgent(flax.struct.PyTreeNode):
 
             # Q evaluation for best-of-N selection.
             def eval_q(candidate, obs, gls):
-                q1, q2 = self.network.select('critic')(obs, gls, candidate)
+                q1, q2 = self._q_for_actor(obs, gls, candidate)
                 return jnp.minimum(q1, q2)
 
             q_vals = jax.vmap(eval_q)(candidates, obs_rep, goals_rep)  # (N, B)
@@ -527,7 +609,9 @@ class ACCRLAgent(flax.struct.PyTreeNode):
             raise ValueError(f'Unsupported actor loss: {self.config["actor_loss"]}')
 
         # Reshape flat output to (*, chunk_length, per_step_action_dim) for evaluation.
-        chunk_length = self.config['action_chunk_length']
+        # Under DQC the actor outputs decoupled_action_chunk_length actions.
+        dacl = self.config['decoupled_action_chunk_length']
+        chunk_length = dacl if dacl is not None else self.config['action_chunk_length']
         if chunk_length > 1:
             actions = actions.reshape(*actions.shape[:-1], chunk_length, -1)
 
@@ -556,8 +640,22 @@ class ACCRLAgent(flax.struct.PyTreeNode):
         rng, init_rng = jax.random.split(rng, 2)
 
         ex_goals = ex_observations
-        # action_dim is chunk_length * per_step_action_dim for ACCRL.
+        # action_dim is action_chunk_length * per_step_action_dim for the standard critic.
         action_dim = ex_actions.shape[-1]
+
+        # Decoupled Q-chunking (DQC): the actor (and DQC critic) operate on the first
+        # decoupled_action_chunk_length actions, while the standard critic keeps the full chunk.
+        dacl = config['decoupled_action_chunk_length']
+        if dacl is not None:
+            assert dacl <= config['action_chunk_length'], (
+                'decoupled_action_chunk_length must be <= action_chunk_length'
+            )
+            per_step_action_dim = action_dim // config['action_chunk_length']
+            actor_action_dim = dacl * per_step_action_dim
+            ex_actor_actions = ex_actions[:, :actor_action_dim]
+        else:
+            actor_action_dim = action_dim
+            ex_actor_actions = ex_actions
 
         # Define encoders.
         encoders = dict()
@@ -566,6 +664,8 @@ class ACCRLAgent(flax.struct.PyTreeNode):
             encoders['critic_state'] = encoder_module()
             encoders['critic_goal'] = encoder_module()
             encoders['actor'] = GCEncoder(concat_encoder=encoder_module())
+            if dacl is not None:
+                encoders['dqc_state'] = encoder_module()
             if config['actor_loss'] == 'awr':
                 encoders['value_state'] = encoder_module()
                 encoders['value_goal'] = encoder_module()
@@ -597,17 +697,17 @@ class ACCRLAgent(flax.struct.PyTreeNode):
             # Flow matching actor.
             actor_def = GCFlowMatchingActor(
                 hidden_dims=config['actor_hidden_dims'],
-                action_dim=action_dim,
+                action_dim=actor_action_dim,
                 layer_norm=config['layer_norm'],
                 gc_encoder=encoders.get('actor'),
             )
             ex_time = jnp.zeros(ex_observations.shape[0])
-            actor_init_args = (ex_observations, ex_goals, ex_actions, ex_time)
+            actor_init_args = (ex_observations, ex_goals, ex_actor_actions, ex_time)
         else:
             # Gaussian actor (ddpgbc).
             actor_def = GCActor(
                 hidden_dims=config['actor_hidden_dims'],
-                action_dim=action_dim,
+                action_dim=actor_action_dim,
                 state_dependent_std=False,
                 const_std=config['const_std'],
                 gc_encoder=encoders.get('actor'),
@@ -618,6 +718,16 @@ class ACCRLAgent(flax.struct.PyTreeNode):
             critic=(critic_def, (ex_observations, ex_goals, ex_actions)),
             actor=(actor_def, actor_init_args),
         )
+        if dacl is not None:
+            # DQC critic phi over (s, a_{1:dacl}); psi is reused from the standard critic.
+            dqc_phi_def = GCBilinearPhi(
+                hidden_dims=config['value_hidden_dims'],
+                latent_dim=config['latent_dim'],
+                layer_norm=config['layer_norm'],
+                ensemble=True,
+                state_encoder=encoders.get('dqc_state'),
+            )
+            network_info['dqc_phi'] = (dqc_phi_def, (ex_observations, ex_actor_actions))
         if config['actor_loss'] == 'awr':
             network_info.update(
                 value=(value_def, (ex_observations, ex_goals)),
@@ -628,11 +738,11 @@ class ACCRLAgent(flax.struct.PyTreeNode):
                 encoders['student_actor'] = GCEncoder(concat_encoder=encoder_module())
             student_actor_def = GCOneStepActor(
                 hidden_dims=config['actor_hidden_dims'],
-                action_dim=action_dim,
+                action_dim=actor_action_dim,
                 layer_norm=config['layer_norm'],
                 gc_encoder=encoders.get('student_actor'),
             )
-            ex_noise = jnp.zeros_like(ex_actions)
+            ex_noise = jnp.zeros_like(ex_actor_actions)
             network_info['student_actor'] = (
                 student_actor_def,
                 (ex_observations, ex_goals, ex_noise),
@@ -645,9 +755,12 @@ class ACCRLAgent(flax.struct.PyTreeNode):
         network_params = network_def.init(init_rng, **network_args)['params']
         network = TrainState.create(network_def, network_params, tx=network_tx)
 
-        # Store total_action_dim in config for flow sampling.
+        # Store action dimensions in config. total_action_dim is the actor's flat output
+        # dimension (used for flow sampling), which under DQC is decoupled_action_chunk_length
+        # * per_step. critic_action_dim is the full chunk dimension of the standard critic.
         config_dict = dict(config)
-        config_dict['total_action_dim'] = action_dim
+        config_dict['total_action_dim'] = actor_action_dim
+        config_dict['critic_action_dim'] = action_dim
 
         return cls(rng, network=network, config=flax.core.FrozenDict(**config_dict))
 
@@ -672,6 +785,11 @@ def get_config():
             encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
             # Action chunking hyperparameters.
             action_chunk_length=1,  # Number of consecutive actions per chunk.
+            # Decoupled Q-chunking (DQC). When set, the actor outputs a chunk of this length
+            # (<= action_chunk_length) and is trained against a DQC critic distilled from the
+            # standard (full-chunk) critic. None disables DQC.
+            decoupled_action_chunk_length=ml_collections.config_dict.placeholder(int),
+            kappa_dqc=0.9,  # Expectile parameter for the DQC critic distillation loss (DQC only).
             replan_length=ml_collections.config_dict.placeholder(int),  # Steps to execute per chunk before replanning (None = full chunk).
             shift_goals=False,  # Whether to shift goal sampling (action_chunk_length - 1) ahead of the current state.
             # Flow matching hyperparameters.
