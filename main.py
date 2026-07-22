@@ -11,7 +11,7 @@ import wandb
 from absl import app, flags
 from agents import agents
 from ml_collections import config_flags
-from utils.datasets import Dataset, GCDataset, HGCDataset
+from utils.datasets import ACGCDataset, Dataset, GCDataset, HGCDataset
 from utils.env_utils import make_env_and_datasets
 from utils.evaluation import evaluate
 from utils.flax_utils import restore_agent, save_agent
@@ -24,6 +24,8 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string('run_group', 'Debug', 'Run group.')
 flags.DEFINE_integer('seed', 0, 'Random seed.')
 flags.DEFINE_string('env_name', 'antmaze-large-navigate-v0', 'Environment (dataset) name.')
+flags.DEFINE_string('dataset_path', None, 'Path to a custom dataset .npz file. Overrides auto-download; '
+                    'env_name must still be a valid OGBench name for environment construction.')
 flags.DEFINE_string('save_dir', 'exp/', 'Save directory.')
 flags.DEFINE_string('restore_path', None, 'Restore path.')
 flags.DEFINE_integer('restore_epoch', None, 'Restore epoch.')
@@ -57,11 +59,14 @@ def main(_):
 
     # Set up environment and dataset.
     config = FLAGS.agent
-    env, train_dataset, val_dataset = make_env_and_datasets(FLAGS.env_name, frame_stack=config['frame_stack'])
+    env, train_dataset, val_dataset = make_env_and_datasets(
+        FLAGS.env_name, frame_stack=config['frame_stack'], dataset_path=FLAGS.dataset_path
+    )
 
     dataset_class = {
         'GCDataset': GCDataset,
         'HGCDataset': HGCDataset,
+        'ACGCDataset': ACGCDataset,
     }[config['dataset_class']]
     train_dataset = dataset_class(Dataset.create(**train_dataset), config)
     if val_dataset is not None:
@@ -76,11 +81,17 @@ def main(_):
         # Fill with the maximum action to let the agent know the action space size.
         example_batch['actions'] = np.full_like(example_batch['actions'], env.action_space.n - 1)
 
+    # For action-chunked datasets, use flattened action chunks as example actions.
+    if 'action_chunks' in example_batch:
+        ex_actions = example_batch['action_chunks'].reshape(example_batch['action_chunks'].shape[0], -1)
+    else:
+        ex_actions = example_batch['actions']
+
     agent_class = agents[config['agent_name']]
     agent = agent_class.create(
         FLAGS.seed,
         example_batch['observations'],
-        example_batch['actions'],
+        ex_actions,
         config,
     )
 
@@ -134,6 +145,7 @@ def main(_):
                     video_frame_skip=FLAGS.video_frame_skip,
                     eval_temperature=FLAGS.eval_temperature,
                     eval_gaussian=FLAGS.eval_gaussian,
+                    replan_length=config.get('replan_length'),
                 )
                 renders.extend(cur_renders)
                 metric_names = ['success']

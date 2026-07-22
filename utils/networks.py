@@ -140,6 +140,100 @@ class RunningMeanStd(flax.struct.PyTreeNode):
         return self.replace(mean=new_mean, var=new_var, count=total_count)
 
 
+class GCFlowMatchingActor(nn.Module):
+    """Goal-conditioned flow matching actor.
+
+    Parameterizes a velocity field v(x_t, t | s, g) for flow matching.
+    Input is [condition, noisy_actions, time] concatenated.
+    Output is predicted velocity (same dim as actions).
+
+    Attributes:
+        hidden_dims: Hidden layer dimensions.
+        action_dim: Action dimension (chunk_length * per_step_action_dim).
+        layer_norm: Whether to apply layer normalization.
+        gc_encoder: Optional GCEncoder module to encode the inputs.
+    """
+
+    hidden_dims: Sequence[int]
+    action_dim: int
+    layer_norm: bool = True
+    gc_encoder: nn.Module = None
+
+    def setup(self):
+        self.velocity_net = MLP(
+            (*self.hidden_dims, self.action_dim),
+            activate_final=False,
+            layer_norm=self.layer_norm,
+        )
+
+    def __call__(self, observations, goals=None, actions=None, time=None):
+        """Predict the velocity field.
+
+        Args:
+            observations: Observations.
+            goals: Goals (optional).
+            actions: Noisy actions x_t.
+            time: Diffusion time t in [0, 1].
+        """
+        if self.gc_encoder is not None:
+            condition = self.gc_encoder(observations, goals)
+        else:
+            inputs = [observations]
+            if goals is not None:
+                inputs.append(goals)
+            condition = jnp.concatenate(inputs, axis=-1)
+
+        time_input = time[..., None]  # (...,) -> (..., 1)
+        net_input = jnp.concatenate([condition, actions, time_input], axis=-1)
+        return self.velocity_net(net_input)
+
+
+class GCOneStepActor(nn.Module):
+    """Goal-conditioned one-step actor for FQL (Flow Q-Learning).
+
+    Maps noise z ~ N(0,I) directly to an action in one forward pass.
+    Input is [condition, z] concatenated (no time input, no ODE integration).
+    Output is the predicted action (same dim as z).
+
+    Attributes:
+        hidden_dims: Hidden layer dimensions.
+        action_dim: Action dimension (chunk_length * per_step_action_dim).
+        layer_norm: Whether to apply layer normalization.
+        gc_encoder: Optional GCEncoder module to encode the inputs.
+    """
+
+    hidden_dims: Sequence[int]
+    action_dim: int
+    layer_norm: bool = True
+    gc_encoder: nn.Module = None
+
+    def setup(self):
+        self.net = MLP(
+            (*self.hidden_dims, self.action_dim),
+            activate_final=False,
+            layer_norm=self.layer_norm,
+        )
+
+    def __call__(self, observations, goals=None, noise=None):
+        """Predict the action directly from noise.
+
+        Args:
+            observations: Observations.
+            goals: Goals (optional).
+            noise: Noise vector z ~ N(0,I), same shape as actions.
+        """
+        if self.gc_encoder is not None:
+            condition = self.gc_encoder(observations, goals)
+        else:
+            inputs = [observations]
+            if goals is not None:
+                inputs.append(goals)
+            condition = jnp.concatenate(inputs, axis=-1)
+
+        net_input = jnp.concatenate([condition, noise], axis=-1)
+        return self.net(net_input)
+
+
 class GCActor(nn.Module):
     """Goal-conditioned actor.
 
@@ -397,6 +491,47 @@ class GCBilinearValue(nn.Module):
             return v, phi, psi
         else:
             return v
+
+
+class GCBilinearPhi(nn.Module):
+    """Phi-only bilinear representation for the decoupled Q-chunking (DQC) critic.
+
+    Computes only the state-action representation phi(s, a) with the same architecture as
+    ``GCBilinearValue.phi``. The DQC value is formed externally as
+    phi(s, a)^T psi(g) / sqrt(d), reusing psi (the goal representation) from the standard
+    critic, so that only the (s, a) encoder is trained here.
+
+    Attributes:
+        hidden_dims: Hidden layer dimensions.
+        latent_dim: Latent dimension (must match the standard critic's latent_dim).
+        layer_norm: Whether to apply layer normalization.
+        ensemble: Whether to ensemble (must match the standard critic).
+        state_encoder: Optional state encoder (trained as part of the DQC critic).
+    """
+
+    hidden_dims: Sequence[int]
+    latent_dim: int
+    layer_norm: bool = True
+    ensemble: bool = True
+    state_encoder: nn.Module = None
+
+    def setup(self):
+        mlp_module = MLP
+        if self.ensemble:
+            mlp_module = ensemblize(mlp_module, 2)
+        self.phi = mlp_module((*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
+
+    def __call__(self, observations, actions):
+        """Return phi(s, a).
+
+        Args:
+            observations: Observations.
+            actions: Flattened (decoupled) action chunk.
+        """
+        if self.state_encoder is not None:
+            observations = self.state_encoder(observations)
+        phi_inputs = jnp.concatenate([observations, actions], axis=-1)
+        return self.phi(phi_inputs)
 
 
 class GCDiscreteBilinearCritic(GCBilinearValue):
