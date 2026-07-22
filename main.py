@@ -11,7 +11,7 @@ import wandb
 from absl import app, flags
 from agents import agents
 from ml_collections import config_flags
-from utils.datasets import ADGCDataset, Dataset, GCDataset, HGCDataset
+from utils.datasets import ACGCDataset, Dataset, GCDataset, HGCDataset
 from utils.env_utils import make_env_and_datasets
 from utils.evaluation import evaluate
 from utils.flax_utils import restore_agent, save_agent
@@ -66,7 +66,7 @@ def main(_):
     dataset_class = {
         'GCDataset': GCDataset,
         'HGCDataset': HGCDataset,
-        'ADGCDataset': ADGCDataset,
+        'ACGCDataset': ACGCDataset,
     }[config['dataset_class']]
     train_dataset = dataset_class(Dataset.create(**train_dataset), config)
     if val_dataset is not None:

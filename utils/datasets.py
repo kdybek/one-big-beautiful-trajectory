@@ -333,16 +333,11 @@ class GCDataset:
 
 
 @dataclasses.dataclass
-class ADGCDataset(GCDataset):
-    """Dataset class for action-chunked goal-conditioned RL.
+class ACGCDataset(GCDataset):
+    """Dataset for action-chunked goal-conditioned RL.
 
-    Extends GCDataset to support action chunking. For each sampled state, returns a chunk of
-    `action_chunk_length` consecutive actions instead of a single action. Goals are sampled
-    at least `action_chunk_length` transitions ahead to ensure the goal lies outside the
-    action chunk horizon.
-
-    Extra attributes:
-        action_chunk_length: Number of consecutive actions to include per sample.
+    Extends GCDataset so each sampled state returns a chunk of `action_chunk_length`
+    consecutive actions instead of a single action.
     """
 
     action_chunk_length: int = 1
@@ -363,18 +358,8 @@ class ADGCDataset(GCDataset):
         (self.chunk_valid_idxs,) = np.nonzero(valid_mask)
 
     def sample(self, batch_size, idxs=None, evaluation=False):
-        """Sample a batch of transitions with action chunks and goals.
-
-        Returns a batch with 'action_chunks' of shape (batch_size, action_chunk_length, action_dim)
-        instead of a single 'actions' entry. Goals are guaranteed to be at least
-        action_chunk_length transitions after the current state.
-
-        Args:
-            batch_size: Batch size.
-            idxs: Indices of the transitions to sample. If None, random indices are sampled
-                from chunk_valid_idxs.
-            evaluation: Whether to sample for evaluation. If True, image augmentation is not
-                applied.
+        """Sample a batch with 'action_chunks' of shape (batch_size, action_chunk_length, action_dim)
+        in place of a single 'actions' entry. Goal sampling is inherited from GCDataset.
         """
         if idxs is None:
             idxs = self.chunk_valid_idxs[np.random.randint(len(self.chunk_valid_idxs), size=batch_size)]
@@ -418,40 +403,6 @@ class ADGCDataset(GCDataset):
                 self.augment(batch, ['observations', 'next_observations', 'value_goals', 'actor_goals'])
 
         return batch
-
-    def sample_goals(self, idxs, p_curgoal, p_trajgoal, p_randomgoal, geom_sample):
-        """Sample trajectory goals for the given indices.
-
-        Goals are sampled in the standard way starting from the current state (offset of 1).
-        """
-        batch_size = len(idxs)
-
-        # Random goals (any state in the dataset).
-        random_goal_idxs = self.dataset.get_random_idxs(batch_size)
-
-        final_state_idxs = self.terminal_locs[np.searchsorted(self.terminal_locs, idxs)]
-
-        if geom_sample:
-            # Geometric sampling offset in [1, inf).
-            offsets = np.random.geometric(p=1 - self.config['discount'], size=batch_size)
-            traj_goal_idxs = np.minimum(idxs + offsets, final_state_idxs)
-        else:
-            # Uniform sampling between (idxs + 1) and final_state_idxs.
-            min_traj_goal_idxs = np.minimum(idxs + 1, final_state_idxs)
-            distances = np.random.rand(batch_size)  # in [0, 1)
-            traj_goal_idxs = np.round(
-                min_traj_goal_idxs * distances + final_state_idxs * (1 - distances)
-            ).astype(int)
-
-        if p_curgoal == 1.0:
-            goal_idxs = idxs
-        else:
-            goal_idxs = np.where(
-                np.random.rand(batch_size) < p_trajgoal / (1.0 - p_curgoal), traj_goal_idxs, random_goal_idxs
-            )
-            goal_idxs = np.where(np.random.rand(batch_size) < p_curgoal, idxs, goal_idxs)
-
-        return goal_idxs
 
 
 @dataclasses.dataclass
