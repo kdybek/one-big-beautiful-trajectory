@@ -109,11 +109,6 @@ def main(_):
         batch = train_dataset.sample(config['batch_size'])
         agent, update_info = agent.update(batch)
 
-        # Log action sensitivity metrics every 1000 steps (ACCRL only).
-        if i % 1000 == 0 and hasattr(agent, '_action_sensitivity_metrics'):
-            sens_info = agent._action_sensitivity_metrics(batch, jax.random.fold_in(agent.rng, i))
-            update_info.update(sens_info)
-
         # Log metrics.
         if i % FLAGS.log_interval == 0:
             train_metrics = {f'training/{k}': v for k, v in update_info.items()}

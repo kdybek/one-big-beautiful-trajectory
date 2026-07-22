@@ -320,67 +320,6 @@ class ACCRLAgent(flax.struct.PyTreeNode):
         return loss, info
 
     @jax.jit
-    def _action_sensitivity_metrics(self, batch, rng, n_samples=1000):
-        """Measure Q-value statistics and critic sensitivity to actions.
-
-        Computes:
-        - Var/mean of Q over random uniform actions at a fixed (s, g).
-        - ||grad_a Q(s,a)|| / sqrt(action_dim) at the current policy action (flow sample).
-        - ||grad_a Q(s,a)|| / sqrt(action_dim) averaged over batch actions from the replay buffer.
-        """
-        s = batch['observations'][0:1]       # (1, obs_dim)
-        g = batch['value_goals'][0:1]        # (1, goal_dim)
-        action_dim = self.config['total_action_dim']
-
-        # --- Q variance over random uniform actions ---
-        rng, uniform_rng = jax.random.split(rng)
-        random_actions = jax.random.uniform(uniform_rng, (n_samples, action_dim), minval=-1.0, maxval=1.0)
-        s_rep = jnp.repeat(s, n_samples, axis=0)
-        g_rep = jnp.repeat(g, n_samples, axis=0)
-        q1, q2 = self._q_for_actor(s_rep, g_rep, random_actions)
-        q = jnp.minimum(q1, q2)
-
-        # --- grad_a Q at policy action (consistent with evaluation per actor_loss) ---
-        rng, noise_rng = jax.random.split(rng)
-        if self.config['actor_loss'] == 'fql':
-            z = jax.random.normal(noise_rng, (1, action_dim))
-            policy_action = self.network.select('student_actor')(s, g, noise=z)
-            policy_action = jnp.clip(policy_action, -1, 1)  # (1, action_dim)
-        elif self.config['actor_loss'] in ('awr', 'bestofn'):
-            policy_action = self._flow_sample(s, g, noise_rng, num_samples=1)  # (1, action_dim), s is batched
-        else:  # ddpgbc
-            dist = self.network.select('actor')(s, g)
-            policy_action = jnp.clip(dist.mode(), -1, 1)  # (1, action_dim)
-
-        def q_fn_policy(a):
-            q1, q2 = self._q_for_actor(s, g, a)
-            return jnp.minimum(q1, q2).squeeze()
-
-        grad_policy = jax.grad(q_fn_policy)(policy_action)   # (1, action_dim)
-        grad_norm_policy = jnp.linalg.norm(grad_policy) / jnp.sqrt(action_dim)
-
-        # --- grad_a Q averaged over batch actions ---
-        # Slice the dataset chunk to the actor's action dimension under DQC.
-        dacl = self.config['decoupled_action_chunk_length']
-        chunks = batch['action_chunks'] if dacl is None else batch['action_chunks'][:, :dacl]
-        flat_actions = chunks.reshape(chunks.shape[0], -1)
-
-        def q_fn_single(s_i, g_i, a_i):
-            q1, q2 = self._q_for_actor(s_i[None], g_i[None], a_i[None])
-            return jnp.minimum(q1, q2).squeeze()
-
-        grad_fn = jax.grad(q_fn_single, argnums=2)
-        grad_batch = jax.vmap(grad_fn)(batch['observations'], batch['value_goals'], flat_actions)
-        grad_norm_batch = jnp.mean(jnp.linalg.norm(grad_batch, axis=-1)) / jnp.sqrt(action_dim)
-
-        return {
-            'critic/action_q_var': jnp.var(q),
-            'critic/action_q_mean': jnp.mean(q),
-            'critic/grad_norm_policy_action': grad_norm_policy,
-            'critic/grad_norm_batch_action': grad_norm_batch,
-        }
-
-    @jax.jit
     def update(self, batch):
         """Update the agent and return a new agent with information dictionary."""
         new_rng, rng = jax.random.split(self.rng)
@@ -791,7 +730,6 @@ def get_config():
             decoupled_action_chunk_length=ml_collections.config_dict.placeholder(int),
             kappa_dqc=0.9,  # Expectile parameter for the DQC critic distillation loss (DQC only).
             replan_length=ml_collections.config_dict.placeholder(int),  # Steps to execute per chunk before replanning (None = full chunk).
-            shift_goals=False,  # Whether to shift goal sampling (action_chunk_length - 1) ahead of the current state.
             # Flow matching hyperparameters.
             num_flow_steps=10,  # Number of Euler integration steps for flow matching ODE.
             best_of_n=1,  # Number of candidates for best-of-N selection (bestofn and fql modes).
